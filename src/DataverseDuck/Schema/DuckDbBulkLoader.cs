@@ -57,7 +57,10 @@ public sealed class DuckDbBulkLoader(DuckDBConnection connection)
         ArgumentNullException.ThrowIfNull(mapping);
 
         var rows = 0L;
-        var buffer = new object?[reader.FieldCount];
+
+        // GetValues writes DBNull.Value for null columns, never a null reference,
+        // so the buffer is non-nullable. ConvertValue maps DBNull to null.
+        var buffer = new object[reader.FieldCount];
 
         using var appender = _connection.CreateAppender(mapping.TableName);
 
