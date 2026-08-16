@@ -23,3 +23,7 @@ appsettings.*.Local.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Scratch output written by the spikes when they run
+spikes/*/ts.json
+spikes/*/evt_*.json

@@ -52,6 +52,27 @@ All from `spikes/TimezoneSpike`, run on DuckDB 1.5.5 via DuckDB.NET 1.5.5.
    millis degrades the whole column to `JSON`, and `TRY_CAST(1755345600000 AS TIMESTAMP)`
    returns `NULL` — rows vanish silently.
 8. **`epoch_ms()` already returns a naive UTC `TIMESTAMP`**, stable across sessions.
+9. **Inference is not stable enough to build on.** A field mixing `"...Z"` with
+   `"...+02:00"` may infer as either `TIMESTAMP` (offsets applied, measurement 3) or
+   `VARCHAR` (offsets raw, and then measurement 4 applies) — and **a single trailing
+   newline on the file flips which**, on the same engine and the same two rows:
+
+   | file | inferred | value of row 2 |
+   |---|---|---|
+   | no trailing newline | `TIMESTAMP` | `2026-08-16 10:00:00` (correct) |
+   | one trailing newline | `VARCHAR` | `2026-08-16T12:00:00+02:00` (raw) |
+
+   The mechanism was not determined. The consequence is that a query relying on the
+   inferred type can be correct for one log file and silently wrong for the next.
+
+   This is why the mitigation is the runtime detector of ADR 0005 rather than a rule
+   about how to write queries: the type cannot be predicted from the file, so it is
+   *observed* after loading and reported, with the `TIMESTAMPTZ` cast offered as the
+   fix. Measurement 3 is therefore true but must not be relied on.
+
+   Where a query is written by hand against a log file, pinning the column with
+   `read_json_auto(path, columns = {ts: 'VARCHAR'})` and casting through `TIMESTAMPTZ`
+   is correct under every session timezone and both file variants (verified).
 
 ## Decision
 

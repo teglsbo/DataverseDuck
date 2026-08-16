@@ -69,49 +69,133 @@ Show(conn, """
     """);
 
 // ---------------------------------------------------------------- 4
-Console.WriteLine("\n[4] THE BUG: joining naive CRM timestamps to offset-bearing JSON");
+// [4] and [5] originally claimed the trap was the session timezone and that
+// "AT TIME ZONE 'UTC'" was the fix. Both were wrong, and the output printed
+// directly under them said so. Rewritten to match measurement.
+Console.WriteLine("\n[4] THE REAL TRAP: the JSON side's shape, not the session timezone");
+Exec(conn, "SET TimeZone = 'UTC'");
 Exec(conn, "CREATE TABLE crm (id INTEGER, createdon TIMESTAMP)");
 using (var app = conn.CreateAppender("crm"))
 {
-    var row = app.CreateRow();
-    row.AppendValue(1);
-    row.AppendValue(DateTime.SpecifyKind(new DateTime(2026, 8, 16, 10, 0, 0), DateTimeKind.Utc));
-    row.EndRow();
+    foreach (var id in new[] { 1, 2 })
+    {
+        var row = app.CreateRow();
+        row.AppendValue(id);
+        row.AppendValue(DateTime.SpecifyKind(new DateTime(2026, 8, 16, 10, 0, 0), DateTimeKind.Utc));
+        row.EndRow();
+    }
 }
-File.WriteAllText("evt.json", """
-{"id":1,"event_at":"2026-08-16T12:00:00+02:00"}
-""");
 
+// (a) Uniform and offset-bearing: DuckDB normalises to UTC for us.
+File.WriteAllText("evt_offset.json", "{\"id\":1,\"event_at\":\"2026-08-16T12:00:00+02:00\"}\n");
 foreach (var tz in new[] { "UTC", "Europe/Berlin" })
 {
     Exec(conn, $"SET TimeZone = '{tz}'");
     Show(conn, $"""
         SELECT '{tz}' AS session_tz,
-               c.createdon::VARCHAR AS crm_naive,
-               j.event_at::VARCHAR  AS json_value,
+               typeof(j.event_at)  AS inferred,
+               j.event_at::VARCHAR AS json_value,
                (c.createdon = j.event_at) AS equal_raw
-        FROM crm c JOIN read_json_auto('evt.json') j ON c.id = j.id
+        FROM crm c JOIN read_json_auto('evt_offset.json') j ON c.id = j.id
         """, indent: "    ");
 }
-Console.WriteLine("  -> Same data, same query, different answer per session TZ. This is the trap.");
+Console.WriteLine("  -> (a) Inferred as naive TIMESTAMP ALREADY CONVERTED to UTC. The join is");
+Console.WriteLine("         correct and the session timezone does not change it. No ceremony needed.");
+
+// (b) Uniform but carrying no offset: silently wrong, nothing warns.
+Exec(conn, "SET TimeZone = 'UTC'");
+File.WriteAllText("evt_naive.json", "{\"id\":1,\"event_at\":\"2026-08-16T12:00:00\"}\n");
+Show(conn, """
+    SELECT typeof(j.event_at)   AS inferred,
+           j.event_at::VARCHAR  AS json_value,
+           c.createdon::VARCHAR AS crm_utc,
+           (c.createdon = j.event_at) AS equal_raw
+    FROM crm c JOIN read_json_auto('evt_naive.json') j ON c.id = j.id
+    """, indent: "    ");
+Console.WriteLine("  -> (b) THE SILENT ONE. The same instant written as local wall-clock with no");
+Console.WriteLine("         offset is taken at face value, so the join is off by the offset and");
+Console.WriteLine("         simply MISSES. No error. Only the producer knows which zone it meant.");
+
+// (c) Mixed shapes: inference is unstable, and a single trailing newline flips it.
+var mixed = "{\"id\":1,\"event_at\":\"2026-08-16T10:00:00Z\"}\n" +
+            "{\"id\":2,\"event_at\":\"2026-08-16T12:00:00+02:00\"}";
+File.WriteAllText("evt_mixed_nonl.json", mixed);
+File.WriteAllText("evt_mixed_nl.json", mixed + "\n");
+foreach (var f in new[] { "evt_mixed_nonl.json", "evt_mixed_nl.json" })
+{
+    Show(conn, $"""
+        SELECT '{f}' AS file, id, typeof(event_at) AS inferred, event_at::VARCHAR AS value
+        FROM read_json_auto('{f}') ORDER BY id
+        """, indent: "    ");
+}
+Console.WriteLine("  -> (c) Same two rows, same engine. WITHOUT a trailing newline the column is");
+Console.WriteLine("         inferred TIMESTAMP and normalised to UTC; WITH one it stays VARCHAR and");
+Console.WriteLine("         keeps the raw offsets. One byte of whitespace changes the column type,");
+Console.WriteLine("         and therefore whether downstream casts are correct. Mechanism unknown;");
+Console.WriteLine("         the lesson is that inference is not something to build on.");
+Show(conn, """
+    SELECT id, event_at::VARCHAR AS raw,
+           TRY_CAST(event_at AS TIMESTAMP)::VARCHAR   AS cast_naive,
+           TRY_CAST(event_at AS TIMESTAMPTZ)::VARCHAR AS cast_tz
+    FROM read_json_auto('evt_mixed_nl.json', columns = {id: 'INTEGER', event_at: 'VARCHAR'})
+    ORDER BY id
+    """, indent: "    ");
+Console.WriteLine("  -> When it IS VARCHAR, row 2 casts to TIMESTAMP as 12:00 -- the offset is");
+Console.WriteLine("     DROPPED, not applied -- while TIMESTAMPTZ gives the correct 10:00.");
 
 // ---------------------------------------------------------------- 5
-Console.WriteLine("\n[5] THE FIX: normalise both sides to UTC-naive TIMESTAMP");
-Exec(conn, "SET TimeZone = 'Europe/Berlin'");
+Console.WriteLine("\n[5] THE FIX: pin the column to VARCHAR, then cast to TIMESTAMPTZ and strip to UTC");
+Console.WriteLine("    Direction matters. AT TIME ZONE on a TIMESTAMPTZ yields a naive value, but on");
+Console.WriteLine("    a naive TIMESTAMP it yields a TIMESTAMPTZ. Applying it to an already-naive");
+Console.WriteLine("    value is what makes a query session-dependent -- the old bug in this spike.");
 Show(conn, """
-    SELECT c.createdon::VARCHAR AS crm_utc,
-           (j.event_at AT TIME ZONE 'UTC')::VARCHAR AS json_utc,
-           c.createdon = (j.event_at AT TIME ZONE 'UTC') AS equal_normalised
-    FROM crm c JOIN read_json_auto('evt.json') j ON c.id = j.id
+    SELECT typeof(event_at)                    AS input_type,
+           typeof(event_at AT TIME ZONE 'UTC') AS after_at_time_zone
+    FROM read_json_auto('evt_offset.json')
     """, indent: "    ");
-Exec(conn, "SET TimeZone = 'UTC'");
-Show(conn, """
-    SELECT c.createdon::VARCHAR AS crm_utc,
-           (j.event_at AT TIME ZONE 'UTC')::VARCHAR AS json_utc,
-           c.createdon = (j.event_at AT TIME ZONE 'UTC') AS equal_normalised
-    FROM crm c JOIN read_json_auto('evt.json') j ON c.id = j.id
-    """, indent: "    ");
-Console.WriteLine("  -> Stable under both sessions. AT TIME ZONE 'UTC' converts TIMESTAMPTZ -> naive UTC.");
+
+Console.WriteLine("\n    Pinning the type with columns = {...} removes the dependence on inference,");
+Console.WriteLine("    so the same query is correct for both files under any session timezone:");
+const string pinned = "columns = {id: 'INTEGER', event_at: 'VARCHAR'}";
+foreach (var f in new[] { "evt_mixed_nonl.json", "evt_mixed_nl.json" })
+{
+    foreach (var tz in new[] { "UTC", "Europe/Berlin", "America/New_York" })
+    {
+        Exec(conn, $"SET TimeZone = '{tz}'");
+        Show(conn, $"""
+            SELECT '{f}' AS file, '{tz}' AS session_tz, c.id,
+                   c.createdon = (CAST(j.event_at AS TIMESTAMPTZ) AT TIME ZONE 'UTC') AS fixed
+            FROM crm c
+            JOIN read_json_auto('{f}', {pinned}) j
+              ON c.id = j.id
+            ORDER BY c.id
+            """, indent: "    ");
+    }
+}
+Console.WriteLine("  -> True for every row, both files, every session timezone.");
+
+Console.WriteLine("\n    Case (b) has no syntactic fix: the zone is not in the data. It must be");
+Console.WriteLine("    supplied as an explicit assumption about the producer.");
+foreach (var tz in new[] { "UTC", "America/New_York" })
+{
+    Exec(conn, $"SET TimeZone = '{tz}'");
+    Show(conn, $"""
+        SELECT '{tz}' AS session_tz,
+               ((j.event_at AT TIME ZONE 'Europe/Copenhagen') AT TIME ZONE 'UTC')::VARCHAR AS assumed_utc,
+               c.createdon = ((j.event_at AT TIME ZONE 'Europe/Copenhagen') AT TIME ZONE 'UTC') AS fixed
+        FROM crm c JOIN read_json_auto('evt_naive.json') j ON c.id = j.id
+        """, indent: "    ");
+}
+Console.WriteLine("  -> Declaring the zone recovers the match and is session-independent, but it is");
+Console.WriteLine("     only as correct as the assumption, which the file cannot confirm.");
+
+// ---------------------------------------------------------------- 5b
+Console.WriteLine("\n[5b] NOT every Dataverse datetime is an instant (see ADR 0010)");
+Console.WriteLine("    All of the above assumes the CRM side is a UTC instant. Columns whose");
+Console.WriteLine("    DateTimeBehavior is DateOnly or TimeZoneIndependent are wall-clock values:");
+Console.WriteLine("    a birthdate of 1980-05-15 is that date everywhere, and shifting it by any");
+Console.WriteLine("    offset is corruption, not normalisation. dvduck resolves this from attribute");
+Console.WriteLine("    metadata and maps such columns to DATE or naive TIMESTAMP, never shifting them.");
 
 // ---------------------------------------------------------------- 6
 Console.WriteLine("\n[6] Round-trip fidelity: does a UTC DateTime survive intact?");
