@@ -13,6 +13,57 @@ Total time: about 20 minutes.
 
 ---
 
+## 0. What permissions do you need in the tenant?
+
+If you are a developer in a corporate tenant rather than its admin, this is the first
+question, and the answer is better than people expect.
+
+**You do not need admin consent.** This is the usual corporate blocker and it does not
+apply here. Admin consent is only required to grant *API permissions*, and Dataverse S2S
+requests none (see step 2). Since there is nothing to consent to, no Global Administrator,
+Privileged Role Administrator or Cloud Application Administrator has to be involved.
+Developers arriving from SharePoint or Graph assume otherwise and go asking for a consent
+grant they never needed.
+
+Four gates stand between you and a working setup. **All four are open by default**, and
+all four can be closed by an admin — you cannot see which, so find out by trying:
+
+| Gate | Default | If it is closed |
+|---|---|---|
+| Register an application (`usersCanRegisterApplications`) | Any member user may | Ask for the **Application Developer** role |
+| Add a client secret to an app you own | Ownership is enough | An app management policy blocks or time-limits secrets; ask the admin |
+| Sign up for the Power Apps Developer Plan (`allowedToSignUpEmailBasedSubscriptions`) | Self-service sign-up allowed | Ask the admin to enable it, or use your own tenant |
+| Create a developer environment (`disableDeveloperEnvironmentCreationByNonAdminUsers`) | Licensed users may | Ask the admin, or use your own tenant |
+
+**Application Developer** is the least-privileged role that unblocks the first gate. It is
+worth naming it specifically when you ask: it only lets the holder create applications and
+be added as their owner. It cannot manage apps it does not own and cannot grant consent —
+unlike Cloud Application Administrator or Application Administrator, which are far broader
+and are what an admin will otherwise reach for.
+
+**Step 4 needs no admin either, if the environment is yours.** The creator of a developer
+environment is automatically System Administrator in it, which is exactly the privilege
+required to create the application user. In someone else's environment — a shared sandbox
+— you need System Administrator there, and only its admin can give you that.
+
+So the realistic best case is **zero admin involvement**, and the realistic minimal ask is
+one role: Application Developer.
+
+### If the tenant is locked down
+
+Create your own free Entra tenant and sign up for the Developer Plan there. You are Global
+Administrator of it, so every setting above is at its default and open.
+
+Do not plan on the Microsoft 365 Developer Program: since its 2024 restriction it is open
+only to Visual Studio Professional/Enterprise subscribers, partner-program members and
+Premier/Unified Support customers — not to the general public.
+
+There is also a governance question worth asking before you start: creating app
+registrations and environments in an employer's tenant is a real footprint, and a separate
+tenant avoids it entirely.
+
+---
+
 ## 1. Get an environment
 
 Two realistic options.
@@ -188,6 +239,9 @@ potentially sensitive if the environment is a customer's.
 | Connects, but privilege errors | Application user has no security role. Step 4, part 3. |
 | Audience mismatch | Token requested for a generic scope instead of the environment URL. |
 | Table missing | Dynamics 365 app table on a Developer Plan environment. Step 1. |
+| Cannot create the app registration | `usersCanRegisterApplications` is off. Ask for the Application Developer role. Step 0. |
+| Secret creation blocked, or capped at a short lifetime | An app management policy is in force. Prefer a certificate where longevity matters. Step 0. |
+| No **Application users** page in the environment | You are not System Administrator there. Automatic in an environment you created; otherwise ask its admin. Step 0. |
 
 ### Why not the TDS endpoint?
 
