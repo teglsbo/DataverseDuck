@@ -50,7 +50,7 @@ Working end to end against a real Dataverse environment.
 | `DataverseCache` / key-set pushdown | ✅ Built, 28 tests |
 | `.env` loading, `dvduck doctor` remedies | ✅ Built, 17 tests |
 | Named profiles / certificate credentials | ✅ Built, 31 tests; certificate path unverified live |
-| `dvduck repl` (fetch once, query many) | ✅ Built, 24 tests, verified live; interactive keystrokes untested |
+| `dvduck repl` (fetch once, query many) | ✅ Built, 38 tests, verified live; key handling untested |
 | `DataverseThrottling` (429 explanation) | ✅ Built, 9 tests; could not be provoked live, see below |
 | `ServiceProtectionBudget` (limit headers) | ✅ Built, 13 tests, verified live |
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
@@ -65,10 +65,11 @@ Working end to end against a real Dataverse environment.
 - [ ] **Settle the name.** The repository is `dataverse-duck`, the tool is `dvduck`, the
       packages are `DataverseDuck` and `DataverseDuck.Cli`. `PackageId` and
       `ToolCommandName` are hard to change after a first release.
-- [ ] **Exercise the interactive REPL by hand.** The piped path is covered live and the
-      renderer degrades to line reading when a terminal reports no size, but PrettyPrompt's
-      keystroke handling — completion, history, multi-line editing — cannot be driven from
-      a test and has never been used by a person.
+- [ ] **Exercise the interactive REPL by hand.** The piped path is covered live, completion
+      is driven in tests through PrettyPrompt's own `IPromptCallbacks`, and the renderer
+      degrades to line reading when a terminal reports no size. What remains untested is
+      everything only a keyboard reaches: history, multi-line editing, and how the
+      completion window actually looks.
 - [ ] **`dvduck query --snapshot`.** `capture` can write a metadata snapshot but `query`
       cannot read one back, so offline development needs code rather than the CLI
       (ADR 0003).
@@ -106,7 +107,7 @@ debugging session to trace, so consumers are told at build time instead of at ru
 Requires .NET 10.
 
 ```bash
-dotnet test          # 350 tests, no tenant required
+dotnet test          # 364 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -271,7 +272,8 @@ plain DuckDB SQL over what is already cached, so the second question costs nothi
 Dataverse is not contacted until the first `DATAVERSE` block, so a session over an
 existing `--db` file never opens a connection at all. Completion comes from
 `information_schema` for cached tables and from the metadata snapshot for Dataverse
-logical names, which means it works offline.
+logical names, which means it works offline. Names you were typing are offered before
+names that merely contain what you typed, so `name` finds `fullname` without burying it.
 
 `.tables` `.schema` `.format` `.limit` `.help` `.quit`. Output is aligned columns by
 default, capped at 50 rows and 40 characters per cell — this view is for reading, not for
@@ -471,7 +473,7 @@ src/DataverseDuck/          Library
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
   Repl*.cs                  Interactive session, statement loop and terminal table
-tests/DataverseDuck.Tests/  350 tests, no tenant required
+tests/DataverseDuck.Tests/  364 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/large-tables.md        Measured limits, and where key-set pushdown stops paying

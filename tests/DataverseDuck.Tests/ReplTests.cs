@@ -2,6 +2,10 @@ using System.Data;
 using System.Text;
 using DataverseDuck;
 using DataverseDuck.Cli;
+using DataverseDuck.Plans;
+using DuckDB.NET.Data;
+using PrettyPrompt;
+using PrettyPrompt.Consoles;
 
 namespace DataverseDuck.Tests;
 
@@ -286,5 +290,147 @@ public class ReplPlanParsingTests
     {
         Assert.Throws<FormatException>(() =>
             DataversePlanParser.Parse("WITH x AS (SELECT 1)", requireFinalQuery: false));
+    }
+}
+
+/// <summary>
+/// Completion is driven through <see cref="IPromptCallbacks"/>, the same
+/// interface PrettyPrompt uses, so these exercise the real span logic rather
+/// than a convenient approximation of it. That distinction matters: the span
+/// is where the only bug in this code was.
+/// </summary>
+public class ReplCompletionTests : IDisposable
+{
+    private readonly DuckDBConnection _duck = new("Data Source=:memory:");
+    private readonly ReplSession _session;
+    private readonly IPromptCallbacks _callbacks;
+
+    public ReplCompletionTests()
+    {
+        _duck.Open();
+
+        using (var command = _duck.CreateCommand())
+        {
+            command.CommandText = "CREATE TABLE crm_contact (contactid UUID, fullname VARCHAR)";
+            command.ExecuteNonQuery();
+        }
+
+        _session = new ReplSession(_duck, () => null, FoldingPolicy.Warn, snapshot: null);
+        _callbacks = new ReplLoop.Completions(_session);
+    }
+
+    public void Dispose()
+    {
+        _session.Dispose();
+        _duck.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    private async Task<string[]> Complete(string text)
+    {
+        var span = await _callbacks.GetSpanToReplaceByCompletionAsync(text, text.Length, default);
+        var items = await _callbacks.GetCompletionItemsAsync(text, text.Length, span, default);
+
+        return items.Select(item => item.ReplacementText).ToArray();
+    }
+
+    /// <summary>
+    /// PrettyPrompt's default span stops at the '.', so the callback saw 'ta'
+    /// and offered tables and keywords: '.ta' would have been completed to
+    /// '.contact'. Meta commands were unreachable.
+    /// </summary>
+    [Fact]
+    public async Task AMetaCommandCompletes()
+    {
+        var items = await Complete(".ta");
+
+        Assert.Contains(".tables", items);
+        Assert.DoesNotContain(items, item => !item.StartsWith('.'));
+    }
+
+    [Fact]
+    public async Task ABareDotOffersEveryMetaCommand()
+    {
+        var items = await Complete(".");
+
+        Assert.Contains(".help", items);
+        Assert.Contains(".quit", items);
+        Assert.DoesNotContain(items, item => !item.StartsWith('.'));
+    }
+
+    /// <summary>
+    /// A dot is only a command when it opens the statement. Elsewhere it is a
+    /// qualifier or a number, and swallowing it would corrupt what was typed.
+    /// </summary>
+    [Theory]
+    [InlineData("SELECT .5")]
+    [InlineData("SELECT c.full")]
+    public async Task ADotElsewhereIsNotACommand(string text)
+    {
+        var items = await Complete(text);
+
+        Assert.DoesNotContain(items, item => item.StartsWith('.'));
+    }
+
+    [Fact]
+    public async Task ACachedTableCompletes()
+    {
+        Assert.Contains("crm_contact", await Complete("crm_"));
+    }
+
+    [Fact]
+    public async Task AColumnCompletes()
+    {
+        Assert.Contains("fullname", await Complete("SELECT full"));
+    }
+
+    /// <summary>
+    /// The cache manifest is ours, not the user's.
+    /// </summary>
+    [Fact]
+    public async Task TheManifestIsNotOffered()
+    {
+        using (var command = _duck.CreateCommand())
+        {
+            command.CommandText = $"CREATE TABLE {CacheManifest.TableName} (name VARCHAR)";
+            command.ExecuteNonQuery();
+        }
+
+        Assert.DoesNotContain(CacheManifest.TableName, await Complete("dv"));
+    }
+
+    /// <summary>
+    /// A substring match is worth offering, but the name being typed must come
+    /// first or the cut at 100 candidates can drop it.
+    /// </summary>
+    [Fact]
+    public async Task APrefixMatchOutranksASubstringMatch()
+    {
+        var items = await Complete("name");
+
+        Assert.Equal("fullname", items.Single());
+    }
+
+    [Fact]
+    public async Task AKeywordCompletes()
+    {
+        Assert.Contains("SELECT", await Complete("SELE"));
+    }
+
+    /// <summary>
+    /// Opening on every keystroke makes typing feel like wading.
+    /// </summary>
+    [Theory]
+    [InlineData("SELECT c", true)]
+    [InlineData(".", true)]
+    [InlineData("crm_", true)]
+    [InlineData("SELECT ", false)]
+    [InlineData("SELECT 1,", false)]
+    public async Task TheWindowOpensOnlyWhenThereIsSomethingToFilterOn(string text, bool expected)
+    {
+        var actual = await _callbacks.ShouldOpenCompletionWindowAsync(
+            text, text.Length, new KeyPress(new ConsoleKeyInfo('x', ConsoleKey.X, false, false, false)), default);
+
+        Assert.Equal(expected, actual);
     }
 }

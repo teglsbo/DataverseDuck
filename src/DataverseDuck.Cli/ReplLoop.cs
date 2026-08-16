@@ -171,8 +171,42 @@ internal sealed class ReplLoop(ReplSession session)
         return Path.Combine(directory, "history.txt");
     }
 
-    private sealed class Completions(ReplSession session) : PromptCallbacks
+    internal sealed class Completions(ReplSession session) : PromptCallbacks
     {
+        /// <summary>
+        /// The default span stops at the '.', so typing '.ta' asks us to
+        /// complete 'ta' and the dot is invisible to us. Meta commands would
+        /// then never be offered, and the table names that do match 'ta' would
+        /// be committed straight after the dot -- '.contact'. Take the dot into
+        /// the span when it opens the statement.
+        ///
+        /// Only when it opens the statement: in 'a.b' it is a qualifier, and in
+        /// 'SELECT .5' it is a number.
+        /// </summary>
+        protected override async Task<TextSpan> GetSpanToReplaceByCompletionAsync(
+            string text,
+            int caret,
+            CancellationToken cancellationToken)
+        {
+            var span = await base.GetSpanToReplaceByCompletionAsync(text, caret, cancellationToken);
+
+            if (span.Start > 0 && text[span.Start - 1] == '.' && IsBlank(text, span.Start - 1))
+                return new TextSpan(span.Start - 1, span.Length + 1);
+
+            return span;
+        }
+
+        private static bool IsBlank(string text, int end)
+        {
+            for (var i = 0; i < end; i++)
+            {
+                if (!char.IsWhiteSpace(text[i]))
+                    return false;
+            }
+
+            return true;
+        }
+
         protected override Task<IReadOnlyList<CompletionItem>> GetCompletionItemsAsync(
             string text,
             int caret,
@@ -193,6 +227,11 @@ internal sealed class ReplLoop(ReplSession session)
 
             var items = candidates
                 .Where(candidate => candidate.Text.Contains(typed, StringComparison.OrdinalIgnoreCase))
+                // A substring match is worth offering -- 'name' should find
+                // 'fullname' -- but it must not outrank the thing whose name
+                // you were actually typing, which Take() would otherwise cut.
+                .OrderBy(candidate =>
+                    candidate.Text.StartsWith(typed, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
                 .Take(100)
                 .Select(candidate => new CompletionItem(
                     replacementText: candidate.Text,
