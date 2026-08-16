@@ -14,6 +14,7 @@ Measured facts that are not themselves decisions live in
 | [0002](0002-utc-naive-timestamps.md) | Store every timestamp as a naive UTC `TIMESTAMP` | Accepted |
 | [0003](0003-metadata-snapshot-for-offline-work.md) | Capture Dataverse metadata to a snapshot for offline work | Accepted |
 | [0004](0004-execution-plan-folding-guard.md) | Analyse the execution plan and refuse queries that do not fold | Accepted |
+| [0005](0005-detect-textual-json-timestamps.md) | Detect timestamp columns that JSON inference left as text | Accepted |
 
 ## Why there is no CHANGELOG
 
