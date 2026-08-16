@@ -321,3 +321,133 @@ internal sealed class FailOnSecondBatchSource(IReadOnlyDictionary<Guid, string> 
         return read(reader);
     }
 }
+
+/// <summary>
+/// Serves two Dataverse tables, recording how many rows each query was asked
+/// to consider, so a test can prove the narrowing is real.
+/// </summary>
+internal sealed class TwoTableSource : IDataverseQuerySource
+{
+    public required IReadOnlyDictionary<Guid, string> Accounts { get; init; }
+
+    /// <summary>contact id -> (name, parent account id)</summary>
+    public required IReadOnlyDictionary<Guid, (string Name, Guid Parent)> Contacts { get; init; }
+
+    public List<string> ExecutedSql { get; } = [];
+
+    public PlanAnalysis? Analyze(string sql) => null;
+
+    public T Query<T>(string sql, Func<DbDataReader, T> read)
+    {
+        ExecutedSql.Add(sql);
+
+        var keys = ParseKeys(sql).ToHashSet();
+        var table = new DataTable();
+
+        if (sql.Contains("FROM account", StringComparison.OrdinalIgnoreCase))
+        {
+            table.Columns.Add("accountid", typeof(Guid));
+            table.Columns.Add("name", typeof(string));
+
+            foreach (var key in keys.Where(Accounts.ContainsKey))
+                table.Rows.Add(key, Accounts[key]);
+        }
+        else
+        {
+            table.Columns.Add("contactid", typeof(Guid));
+            table.Columns.Add("fullname", typeof(string));
+            table.Columns.Add("parentcustomerid", typeof(Guid));
+
+            foreach (var (id, contact) in Contacts.Where(c => keys.Contains(c.Value.Parent)))
+                table.Rows.Add(id, contact.Name, contact.Parent);
+        }
+
+        using var reader = table.CreateDataReader();
+        return read(reader);
+    }
+
+    private static IEnumerable<Guid> ParseKeys(string sql)
+    {
+        var open = sql.LastIndexOf('(');
+        var close = sql.LastIndexOf(')');
+        if (open < 0 || close < open) yield break;
+
+        foreach (var part in sql[(open + 1)..close].Split(','))
+            if (Guid.TryParse(part.Trim().Trim('\''), out var key))
+                yield return key;
+    }
+}
+
+public class ChainedPushdownTests : IDisposable
+{
+    private readonly DuckDB.NET.Data.DuckDBConnection _connection =
+        UtcTimestampPolicy.OpenConnection("Data Source=:memory:");
+
+    private string? _file;
+
+    public void Dispose()
+    {
+        _connection.Dispose();
+        if (_file is not null) File.Delete(_file);
+        GC.SuppressFinalize(this);
+    }
+
+    private static Guid Acc(int n) => Guid.Parse($"acc00000-0000-0000-0000-{n:D12}");
+    private static Guid Con(int n) => Guid.Parse($"c0000000-0000-0000-0000-{n:D12}");
+
+    [Fact]
+    public void A_second_hop_can_key_off_the_table_the_first_hop_cached()
+    {
+        // The realistic shape: logs name accounts, but you want their contacts.
+        // Because {{ }} runs against DuckDB, and a cached Dataverse table lives
+        // in DuckDB, hops chain -- each one fetching only what the last found.
+        var accounts = Enumerable.Range(1, 5000).ToDictionary(Acc, n => $"Account {n}");
+
+        var contacts = Enumerable.Range(1, 5000)
+            .SelectMany(n => new[] { (Con(n * 2), $"Contact {n}a", Acc(n)), (Con(n * 2 + 1), $"Contact {n}b", Acc(n)) })
+            .ToDictionary(x => x.Item1, x => (x.Item2, x.Item3));
+
+        var source = new TwoTableSource { Accounts = accounts, Contacts = contacts };
+        var cache = new DataverseCache(_connection, source);
+
+        _file = Path.Combine(Path.GetTempPath(), $"dvduck-chain-{Guid.NewGuid():N}.json");
+        File.WriteAllText(_file, $$"""
+            [{"account_id":"{{Acc(3)}}","channel":"webchat"},
+             {"account_id":"{{Acc(8)}}","channel":"webchat"},
+             {"account_id":"{{Acc(9)}}","channel":"branch"}]
+            """);
+
+        cache.RegisterJson("logs", _file);
+
+        // Hop 1: only the accounts the logs mention.
+        var hop1 = cache.Cache("""
+            SELECT accountid, name FROM account
+            WHERE accountid IN {{SELECT DISTINCT CAST(account_id AS UUID) FROM logs WHERE channel='webchat'}}
+            """, "crm_account");
+
+        Assert.Equal(2, hop1.RowCount);
+
+        // Hop 2: only the contacts of those accounts, keyed off hop 1's table.
+        var hop2 = cache.Cache("""
+            SELECT contactid, fullname, parentcustomerid FROM contact
+            WHERE parentcustomerid IN {{SELECT accountid FROM crm_account}}
+            """, "crm_contact");
+
+        Assert.Equal(4, hop2.RowCount);
+
+        // 2 of 5,000 accounts and 4 of 10,000 contacts.
+        using var rows = cache.Query("""
+            SELECT a.name, count(DISTINCT c.contactid) AS contacts
+            FROM crm_account a
+            JOIN crm_contact c ON c.parentcustomerid = a.accountid
+            GROUP BY a.name ORDER BY a.name
+            """);
+
+        Assert.True(rows.Read());
+        Assert.Equal("Account 3", rows.GetString(0));
+        Assert.Equal(2L, rows.GetInt64(1));
+        Assert.True(rows.Read());
+        Assert.Equal("Account 8", rows.GetString(0));
+        Assert.False(rows.Read());
+    }
+}
