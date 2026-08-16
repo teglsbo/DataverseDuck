@@ -41,6 +41,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 | `UtcTimestampPolicy` | ✅ Built, 18 tests |
 | `Sql4CdsConnectionFactory` | ✅ Built |
 | `MetadataSnapshot` / `SnapshotMetadataCache` / `MetadataCapture` | ✅ Built, 12 tests |
+| `dvduck doctor` / `dvduck capture` CLI | ✅ Built, 25 tests |
 | Schema mapper (`DbDataReader` → DDL) | ⏳ Prototyped in spike |
 | Bulk loader (reader → Appender) | ⏳ Prototyped in spike |
 | Execution plan logging | ❌ Not started |
@@ -53,8 +54,26 @@ Early. The foundations are built and tested; nothing has run against a real tena
 Requires .NET 10.
 
 ```bash
-dotnet test          # 30 tests, no tenant required
+dotnet test          # 55 tests, no tenant required
 ```
+
+### Connect to a real environment
+
+Setting up headless access takes about 20 minutes and spans three portals.
+Follow [docs/environment-setup.md](docs/environment-setup.md), then verify:
+
+```bash
+export DATAVERSE_URL="https://yourorg.crm4.dynamics.com"
+export DATAVERSE_TENANT_ID=...  DATAVERSE_CLIENT_ID=...  DATAVERSE_CLIENT_SECRET=...
+
+dotnet run --project src/DataverseDuck.Cli -- doctor account contact
+```
+
+`doctor` exists because Dataverse setup failures are opaque — a missing application user
+and a missing security role both surface as a bare authentication error, but the fixes are
+in different places. It checks each link in the chain and tells you which one broke.
+
+### Use the library
 
 ```csharp
 using DataverseDuck;
@@ -106,9 +125,13 @@ See [ADR 0003](docs/adr/0003-metadata-snapshot-for-offline-work.md).
 src/DataverseDuck/          Library
   UtcTimestampPolicy.cs     Timestamp rules and guard rails
   Sql4CdsConnectionFactory.cs
+  Configuration/            Connection settings and validation
+  Diagnostics/              Environment checks behind 'dvduck doctor'
   Metadata/                 Snapshot capture, storage and offline cache
-tests/DataverseDuck.Tests/  30 tests, no tenant required
+src/DataverseDuck.Cli/      'dvduck' command line tool
+tests/DataverseDuck.Tests/  55 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
+docs/environment-setup.md   Getting headless access to Dataverse
 docs/adr/                   Architecture decision records
 ```
 

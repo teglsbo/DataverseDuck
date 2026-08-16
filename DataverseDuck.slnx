@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/DataverseDuck/DataverseDuck.csproj" />
+    <Project Path="src/DataverseDuck.Cli/DataverseDuck.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/DataverseDuck.Tests/DataverseDuck.Tests.csproj" />
