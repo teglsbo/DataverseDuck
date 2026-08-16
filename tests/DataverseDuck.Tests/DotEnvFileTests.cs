@@ -179,3 +179,35 @@ public class DotEnvFileTests : IDisposable
         }
     }
 }
+
+public class EnvironmentTenantTests
+{
+    [Fact]
+    public void Reads_the_tenant_from_an_authentication_challenge()
+    {
+        var header =
+            "Bearer authorization_uri=https://login.microsoftonline.com/" +
+            "0d3aa8f9-8168-4bc2-bda1-c3972e6d9352/oauth2/authorize, " +
+            "resource_id=https://org13bc90fb.crm4.dynamics.com/";
+
+        Assert.Equal(
+            "0d3aa8f9-8168-4bc2-bda1-c3972e6d9352",
+            DataverseDuck.Diagnostics.EnvironmentTenant.Extract(header));
+    }
+
+    [Theory]
+    [InlineData("Bearer realm=\"\"")]
+    [InlineData("Negotiate")]
+    [InlineData("")]
+    public void Returns_null_when_no_authority_is_present(string header) =>
+        Assert.Null(DataverseDuck.Diagnostics.EnvironmentTenant.Extract(header));
+
+    [Fact]
+    public void Ignores_a_non_guid_authority_segment()
+    {
+        // 'common' and 'organizations' are valid authorities but identify no
+        // specific tenant, so there is nothing to compare against.
+        Assert.Null(DataverseDuck.Diagnostics.EnvironmentTenant.Extract(
+            "Bearer authorization_uri=https://login.microsoftonline.com/common/oauth2/authorize"));
+    }
+}

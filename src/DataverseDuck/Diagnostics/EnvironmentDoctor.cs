@@ -38,6 +38,8 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
                 $"secret={AccessTokenClaims.Mask(_options.ClientSecret)}"),
         };
 
+        checks.Add(await CheckEnvironmentTenantAsync(cancellationToken));
+
         var (tokenCheck, accessToken) = await AcquireTokenAsync(cancellationToken);
         checks.Add(tokenCheck);
 
@@ -63,6 +65,46 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
         }
 
         return new DoctorReport(checks);
+    }
+
+    /// <summary>
+    /// Asks the environment which tenant it authenticates against and compares
+    /// it with the configured one.
+    ///
+    /// Needs no credentials, so it works when everything else fails -- which is
+    /// exactly when it is useful. A mismatch here explains an "application not
+    /// found in the directory" error that would otherwise look like a wrong
+    /// client ID.
+    /// </summary>
+    private async Task<CheckResult> CheckEnvironmentTenantAsync(CancellationToken cancellationToken)
+    {
+        const string name = "Environment tenant";
+
+        var actual = await EnvironmentTenant.DiscoverAsync(
+            _options.EnvironmentUrl.ToString(), cancellationToken: cancellationToken);
+
+        if (actual is null)
+        {
+            return CheckResult.Skip(name, "The environment did not return a readable authentication challenge.");
+        }
+
+        if (_options.TenantId is null)
+        {
+            return CheckResult.Pass(name, $"The environment belongs to tenant {actual}.");
+        }
+
+        if (string.Equals(actual, _options.TenantId, StringComparison.OrdinalIgnoreCase))
+        {
+            return CheckResult.Pass(name, $"The environment belongs to tenant {actual}, which matches.");
+        }
+
+        return CheckResult.Fail(
+            name,
+            $"The environment belongs to tenant {actual}, but {DataverseOptions.TenantIdVariable} " +
+            $"is {_options.TenantId}.",
+            $"The app registration must live in the same tenant as the environment. Either set " +
+            $"{DataverseOptions.TenantIdVariable} to {actual} and register the application there, " +
+            "or use an environment in the tenant you configured.");
     }
 
     private async Task<(CheckResult, string?)> AcquireTokenAsync(CancellationToken cancellationToken)
@@ -109,9 +151,12 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
                    $"and from the environment and organization IDs shown in the Power Platform admin centre.";
 
         if (e.Message.Contains("AADSTS700016"))
-            return $"The tenant exists, but application '{_options.ClientId}' was not found in it. Check " +
-                   $"{DataverseOptions.ClientIdVariable} is the Application (client) ID from the app " +
-                   "registration Overview page, and that the registration is in this tenant.";
+            return $"The tenant exists, but application '{_options.ClientId}' was not found in it. " +
+                   $"Two different mistakes produce this. Most often {DataverseOptions.ClientIdVariable} " +
+                   "holds the *Object ID* rather than the *Application (client) ID* -- both are on the " +
+                   "app registration Overview page, one above the other. Otherwise the registration is " +
+                   "in a different tenant from the environment; the 'Environment tenant' check above " +
+                   "says which tenant the environment expects.";
 
         if (e.Message.Contains("AADSTS500011") || e.Message.Contains("AADSTS650057"))
             return $"The resource principal for '{_options.Scope}' was not found in the tenant. " +
@@ -191,8 +236,23 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
                    "application user was created.";
 
         if (message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase) || message.Contains("403"))
-            return "The application user exists but has no security role. Assign one (System Customizer is " +
-                   "usually enough to read metadata and data) in Admin Center > Application users > Edit security roles.";
+        {
+            // Dataverse returns 403 both for "no application user" and for "user
+            // with no role", and the two are fixed on different screens. The
+            // 'Anonymous' scheme is the tell: Dataverse could not map the token
+            // to any user at all, so there is nobody to assign a role to.
+            var anonymous = message.Contains("Anonymous", StringComparison.OrdinalIgnoreCase);
+
+            return anonymous
+                ? "Dataverse could not map the token to any user -- the *application user* has not been " +
+                  "created yet. Power Platform Admin Center > Environments > your environment > Settings > " +
+                  "Users + permissions > Application users > + New app user, add the app registration " +
+                  $"'{_options.ClientId}', pick the root business unit, and assign a security role " +
+                  "(System Customizer is usually enough). This is a separate step from the Entra registration."
+                : "The application user exists but is missing a security role, or its role lacks the " +
+                  "privileges needed. Assign one (System Customizer is usually enough to read metadata " +
+                  "and data) in Admin Center > Application users > Edit security roles.";
+        }
 
         return "Verify the environment URL, and that an application user exists for this app registration.";
     }
