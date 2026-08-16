@@ -94,6 +94,25 @@ Once created, note the **Environment URL** from
 Power Platform Admin Center > Environments > *your environment*.
 It looks like `https://yourorg.crm4.dynamics.com`.
 
+### Which environment type?
+
+The admin centre offers four (Danish tenants: *Udvikler*, *Prøveversion*, *Sandkasse*,
+*Produktion*). Choose **Developer**.
+
+| Type | Use it? |
+|---|---|
+| **Developer** | ✅ Free, consumes no tenant capacity, and its creator is automatically **System Administrator** — which is exactly the privilege step 4 needs |
+| **Trial** | 30 days, then gone. Only if you need Dynamics 365 app tables |
+| **Sandbox** | Consumes tenant Dataverse capacity and licences; needs a Power Platform admin |
+| **Production** | The same, in your employer's production estate |
+
+The System Administrator point is what makes Developer the only type that needs no admin
+involvement at all. Sandbox and Production also cost capacity that is visibly billed.
+
+Pick the region closest to you (Europe gives a `crm4` URL). **It cannot be changed later.**
+Dataverse is provisioned automatically for a Developer environment; there is no separate
+"add a database" step.
+
 ---
 
 ## 2. Register the application in Entra ID
