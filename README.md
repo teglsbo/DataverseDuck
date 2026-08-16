@@ -231,6 +231,23 @@ JOIN crm_accounts a ON a.accountid = CAST(j.account_id AS UUID)
 GROUP BY a.name, j.level;
 ```
 
+## Large tables
+
+Everything goes through `RetrieveMultiple` with FetchXML: Synapse Link and Fabric Link
+need infrastructure we do not have, and the TDS endpoint does not support service
+principal authentication (ADR 0001).
+
+Measured against a live environment: about **8,000 rows/second** for narrow columns, and
+key-set pushdown is free up to roughly 1,000 keys but superlinear above that. Pushing
+10,000 keys costs the same as scanning a 56,000-row table, so pushdown stops paying at
+about one key per five rows. Above 10,000 keys, chunked requests of ~2,000 are more than
+twice as fast as one large `IN`.
+
+The documented 500-condition FetchXML limit does not apply to an `IN` list: SQL 4 CDS
+folds it into a single condition, and 56,000 keys in one query still ran.
+
+See [docs/large-tables.md](docs/large-tables.md) for the numbers and the official limits.
+
 ## The folding guard
 
 SQL 4 CDS pushes joins and filters into Dataverse as FetchXML where it can, and **silently
@@ -300,6 +317,7 @@ src/DataverseDuck.Cli/      'dvduck' command line tool
 tests/DataverseDuck.Tests/  243 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
+docs/large-tables.md        Measured limits, and where key-set pushdown stops paying
 docs/sql4cds-behaviour.md   Measured engine defaults and type mapping
 docs/adr/                   Architecture decision records
 Directory.Build.props       Shared package metadata; nothing packs unless it opts in
