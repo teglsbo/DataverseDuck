@@ -93,12 +93,12 @@ public class MetadataSnapshotTests
         var restored = RoundTrip(new MetadataSnapshot([BuildEntity("account", 1)]));
         Assert.True(restored.TryGet("account", out var entity));
 
-        var id = Assert.Single(entity.Attributes.Where(a => a.LogicalName == "accountid"));
+        var id = Assert.Single(entity.Attributes, a => a.LogicalName == "accountid");
         Assert.IsType<UniqueIdentifierAttributeMetadata>(id);
         Assert.True(id.IsPrimaryId);
         Assert.Equal(1, id.ColumnNumber);
 
-        var name = Assert.Single(entity.Attributes.Where(a => a.LogicalName == "name"));
+        var name = Assert.Single(entity.Attributes, a => a.LogicalName == "name");
         var stringAttribute = Assert.IsType<StringAttributeMetadata>(name);
         Assert.Equal(160, stringAttribute.MaxLength);
         Assert.True(name.IsPrimaryName);
