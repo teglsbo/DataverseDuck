@@ -225,13 +225,9 @@ internal static class Program
 
         if (Profile is not null)
         {
-            // Fallback to the unprefixed variables is deliberate, but it makes
-            // a typo in the profile name look like the profile simply having
-            // no overrides, so say which one was asked for.
             Console.Error.WriteLine(
-                $"Profile '{Profile}' was selected; its variables are named " +
-                $"{DataverseOptions.VariableName(DataverseOptions.UrlVariable, Profile)} and so on, " +
-                "falling back to the unprefixed ones.");
+                $"Profile '{Profile}' was selected, so its variables are named " +
+                $"{DataverseOptions.VariableName(DataverseOptions.UrlVariable, Profile)} and so on.");
         }
 
         Console.Error.WriteLine("Run 'dvduck help' for the variables, or see docs/environment-setup.md.");

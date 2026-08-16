@@ -118,8 +118,31 @@ public sealed class DataverseOptions
         if (string.IsNullOrWhiteSpace(profile))
             profile = null;
 
-        if (profile is not null && !TryNormalizeProfile(profile, out _, out error))
-            return false;
+        if (profile is not null)
+        {
+            if (!TryNormalizeProfile(profile, out var normalized, out error))
+                return false;
+
+            if (!ProfileExists(normalized))
+            {
+                // Falling back to the unprefixed variables is the point of
+                // profiles, but a profile that overrides nothing is not one
+                // that inherits everything -- it is a name nobody ever set.
+                // Silently handing back the default environment is the worst
+                // outcome here, because the operation then succeeds against
+                // the wrong tenant.
+                var known = KnownProfiles();
+
+                error = $"No variables are set for profile '{profile}'. Expected at least one of " +
+                        $"{Prefix}{normalized}_URL, {Prefix}{normalized}_CLIENT_ID, " +
+                        $"{Prefix}{normalized}_CLIENT_SECRET or the certificate equivalents. " +
+                        (known.Count == 0
+                            ? "No profiles are configured at all; omit the profile to use the " +
+                              "unprefixed variables."
+                            : $"Configured profiles: {string.Join(", ", known)}.");
+                return false;
+            }
+        }
 
         string? Read(string variable) => ReadForProfile(variable, profile);
 
@@ -134,6 +157,62 @@ public sealed class DataverseOptions
             profile,
             out options,
             out error);
+    }
+
+    /// <summary>
+    /// The variables a profile may override. Order is not significant; this is
+    /// also what profile discovery matches names against.
+    /// </summary>
+    private static readonly string[] Suffixes =
+    [
+        UrlVariable, TenantIdVariable, ClientIdVariable, ClientSecretVariable,
+        CertificatePathVariable, CertificatePasswordVariable, CertificateThumbprintVariable,
+    ];
+
+    private static bool ProfileExists(string normalized) =>
+        Suffixes.Any(suffix => !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable(
+                string.Concat(Prefix, normalized, "_", suffix.AsSpan(Prefix.Length)))));
+
+    /// <summary>
+    /// Every profile that has at least one variable set, so that a mistyped
+    /// name can be answered with the names that do exist.
+    ///
+    /// Note that no default variable can be mistaken for a profiled one:
+    /// DATAVERSE_CLIENT_SECRET would need a suffix of 'SECRET' to look like
+    /// profile 'CLIENT', and no such suffix exists. The same holds for
+    /// DATAVERSE_CERT_PATH and DATAVERSE_TENANT_ID.
+    /// </summary>
+    public static IReadOnlyList<string> KnownProfiles()
+    {
+        var found = new SortedSet<string>(StringComparer.Ordinal);
+
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            var name = (string)entry.Key;
+
+            if (!name.StartsWith(Prefix, StringComparison.Ordinal))
+                continue;
+
+            foreach (var suffix in Suffixes)
+            {
+                var tail = suffix.AsSpan(Prefix.Length);
+
+                if (name.Length <= Prefix.Length + tail.Length + 1)
+                    continue;
+
+                if (!name.AsSpan(name.Length - tail.Length).SequenceEqual(tail))
+                    continue;
+
+                if (name[name.Length - tail.Length - 1] != '_')
+                    continue;
+
+                found.Add(name[Prefix.Length..(name.Length - tail.Length - 1)]);
+                break;
+            }
+        }
+
+        return [.. found];
     }
 
     /// <summary>

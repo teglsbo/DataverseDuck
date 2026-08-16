@@ -185,6 +185,81 @@ public class ProfileTests : IDisposable
     }
 
     [Fact]
+    public void A_profile_with_no_variables_of_its_own_is_refused()
+    {
+        // The whole point: a typo must not quietly hand back the default
+        // environment, because the command then succeeds against the wrong
+        // tenant, which is worse than any error.
+        Set(DataverseOptions.UrlVariable, "https://default.crm4.dynamics.com");
+        Set(DataverseOptions.ClientIdVariable, ValidClientId);
+        Set(DataverseOptions.ClientSecretVariable, "secret");
+
+        Assert.False(DataverseOptions.TryLoadFromEnvironment("prodd", out _, out var error));
+        Assert.Contains("prodd", error);
+    }
+
+    [Fact]
+    public void A_mistyped_profile_is_answered_with_the_profiles_that_exist()
+    {
+        Set("DATAVERSE_PROD_URL", "https://prod.crm4.dynamics.com");
+        Set("DATAVERSE_TEST_URL", "https://test.crm4.dynamics.com");
+
+        Assert.False(DataverseOptions.TryLoadFromEnvironment("prodd", out _, out var error));
+
+        Assert.Contains("PROD", error);
+        Assert.Contains("TEST", error);
+    }
+
+    [Fact]
+    public void With_no_profiles_at_all_the_advice_is_to_omit_the_profile()
+    {
+        Set(DataverseOptions.UrlVariable, "https://default.crm4.dynamics.com");
+        Set(DataverseOptions.ClientIdVariable, ValidClientId);
+        Set(DataverseOptions.ClientSecretVariable, "secret");
+
+        Assert.False(DataverseOptions.TryLoadFromEnvironment("prod", out _, out var error));
+        Assert.Contains("omit the profile", error);
+    }
+
+    [Fact]
+    public void One_overridden_variable_is_enough_to_make_a_profile_real()
+    {
+        // Overriding only the certificate password is odd but legitimate, and
+        // the existence rule must not be narrower than the inheritance rule.
+        Set(DataverseOptions.UrlVariable, "https://default.crm4.dynamics.com");
+        Set(DataverseOptions.ClientIdVariable, ValidClientId);
+        Set(DataverseOptions.ClientSecretVariable, "secret");
+        Set("DATAVERSE_TEST_TENANT_ID", ValidTenantId);
+
+        Assert.True(DataverseOptions.TryLoadFromEnvironment("test", out var options, out _));
+        Assert.Equal(ValidTenantId, options.TenantId);
+    }
+
+    [Fact]
+    public void A_default_variable_is_not_mistaken_for_a_profile()
+    {
+        // DATAVERSE_CLIENT_SECRET must not be read as profile 'CLIENT', nor
+        // DATAVERSE_CERT_PATH as profile 'CERT'.
+        Set(DataverseOptions.UrlVariable, "https://default.crm4.dynamics.com");
+        Set(DataverseOptions.ClientIdVariable, ValidClientId);
+        Set(DataverseOptions.ClientSecretVariable, "secret");
+        Set(DataverseOptions.CertificatePathVariable, "/some/app.pfx");
+        Set(DataverseOptions.TenantIdVariable, ValidTenantId);
+
+        Assert.Empty(DataverseOptions.KnownProfiles());
+    }
+
+    [Fact]
+    public void Profiles_are_discovered_from_any_of_their_variables()
+    {
+        Set("DATAVERSE_PROD_URL", "https://prod.crm4.dynamics.com");
+        Set("DATAVERSE_WEST_EU_CLIENT_SECRET", "secret");
+        Set("DATAVERSE_ACC_CERT_THUMBPRINT", new string('A', 40));
+
+        Assert.Equal(["ACC", "PROD", "WEST_EU"], DataverseOptions.KnownProfiles());
+    }
+
+    [Fact]
     public void Variable_names_are_reported_for_the_profile_in_use()
     {
         Assert.Equal("DATAVERSE_URL", DataverseOptions.VariableName(DataverseOptions.UrlVariable, null));

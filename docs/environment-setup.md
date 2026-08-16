@@ -239,9 +239,17 @@ registrations, set `DATAVERSE_PROD_CLIENT_ID` and `DATAVERSE_PROD_CLIENT_SECRET`
 case-insensitive and hyphens become underscores, so `--profile west-eu` reads
 `DATAVERSE_WEST_EU_URL`.
 
-The fallback has one sharp edge: a typo in the profile name looks like a profile with no
-overrides, and you quietly get the default environment. `doctor` prints the profile it
-used on its first line for exactly that reason.
+The fallback stops short of one thing: a profile with no variables of its own is an error,
+not a profile that inherits everything. Without that rule a mistyped name would quietly
+give you the default environment, and the command would then succeed against the wrong
+tenant — worse than any failure. The error lists the profiles that do exist:
+
+```
+$ dvduck doctor --profile prodd
+Configuration error: No variables are set for profile 'prodd'. Expected at least one of
+DATAVERSE_PRODD_URL, DATAVERSE_PRODD_CLIENT_ID, DATAVERSE_PRODD_CLIENT_SECRET or the
+certificate equivalents. Configured profiles: PROD, TEST.
+```
 
 Check progress:
 

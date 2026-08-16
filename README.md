@@ -49,7 +49,8 @@ Working end to end against a real Dataverse environment.
 | `DataversePlanParser` (the `WITH` form) | ✅ Built, 28 tests |
 | `DataverseCache` / key-set pushdown | ✅ Built, 28 tests |
 | `.env` loading, `dvduck doctor` remedies | ✅ Built, 17 tests |
-| Named profiles / certificate credentials | ✅ Built, 25 tests; certificate path unverified live |
+| Named profiles / certificate credentials | ✅ Built, 31 tests; certificate path unverified live |
+| x; certificate path unverified live |
 | `DataverseThrottling` (429 explanation) | ✅ Built, 9 tests; could not be provoked live, see below |
 | `ServiceProtectionBudget` (limit headers) | ✅ Built, 13 tests, verified live |
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
@@ -105,7 +106,7 @@ debugging session to trace, so consumers are told at build time instead of at ru
 Requires .NET 10.
 
 ```bash
-dotnet test          # 320 tests, no tenant required
+dotnet test          # 326 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -135,9 +136,10 @@ dvduck doctor --profile prod
 ```
 
 Anything the profile does not set falls back to the unprefixed variable, so environments
-sharing one app registration need only override the URL. `doctor` prints which profile it
-used, because a typo in the name otherwise looks like a profile with no overrides and
-quietly gives you the default environment.
+sharing one app registration need only override the URL. A profile that sets *nothing* is
+rejected rather than silently resolved to the default environment, so a mistyped name
+fails instead of quietly querying the wrong tenant; the error lists the profiles that do
+exist.
 
 ### Ask a question
 
@@ -423,7 +425,7 @@ src/DataverseDuck/          Library
   Diagnostics/              Environment checks behind 'dvduck doctor'
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
-tests/DataverseDuck.Tests/  320 tests, no tenant required
+tests/DataverseDuck.Tests/  326 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/large-tables.md        Measured limits, and where key-set pushdown stops paying
