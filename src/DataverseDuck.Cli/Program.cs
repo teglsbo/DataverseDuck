@@ -10,6 +10,19 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        // Otherwise the Windows console encodes output in the active code page
+        // and Danish text is mangled before it reaches a pipe. 'false' keeps the
+        // BOM under the --bom flag's control rather than emitting one silently.
+        try
+        {
+            Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        }
+        catch (IOException)
+        {
+            // No console attached (output fully redirected on some hosts). The
+            // stream is UTF-8 already in that case.
+        }
+
         var command = args.FirstOrDefault()?.ToLowerInvariant();
 
         // Before anything reads configuration. Real environment variables still
@@ -57,6 +70,9 @@ internal static class Program
                                        one statement.
               --plan-file <path>       Read that plan from a file instead.
               --db <path>              DuckDB file. Default: in-memory.
+              --bom                    Prefix the output with a UTF-8 byte order mark.
+                                       Excel on non-English Windows needs it to read
+                                       UTF-8; nothing else does. Not valid for json.
               --format <name>          tsv (default), csv or json. All three escape
                                        their delimiters, so a field containing a tab,
                                        comma or newline cannot corrupt the output.
@@ -286,6 +302,7 @@ internal static class Program
         var database = ":memory:";
         var policy = FoldingPolicy.Warn;
         var format = OutputFormat.Tsv;
+        var byteOrderMark = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -341,6 +358,10 @@ internal static class Program
 
                     break;
 
+                case "--bom":
+                    byteOrderMark = true;
+                    break;
+
                 case "--strict":
                     policy = FoldingPolicy.RejectCritical;
                     break;
@@ -349,6 +370,14 @@ internal static class Program
                     Console.Error.WriteLine($"Unknown option '{args[i]}'. Run 'dvduck help'.");
                     return 2;
             }
+        }
+
+        if (byteOrderMark && format == OutputFormat.Json)
+        {
+            Console.Error.WriteLine(
+                "--bom cannot be used with --format json: RFC 8259 section 8.1 says implementations " +
+                "must not add a byte order mark to JSON, and many parsers reject it.");
+            return 2;
         }
 
         if (plan is null)
@@ -441,7 +470,7 @@ internal static class Program
             }
 
             using var reader = cache.Query(finalSql);
-            WriteResults(reader, format);
+            WriteResults(reader, format, byteOrderMark);
             return 0;
         }
         catch (DataverseThrottledException e)
@@ -477,9 +506,10 @@ internal static class Program
     /// Writes results to stdout. The row count goes to stderr so that
     /// redirecting stdout gives a clean, parseable file.
     /// </summary>
-    private static void WriteResults(System.Data.Common.DbDataReader reader, OutputFormat format)
+    private static void WriteResults(
+        System.Data.Common.DbDataReader reader, OutputFormat format, bool byteOrderMark)
     {
-        var rows = ResultWriter.Write(reader, Console.Out, format);
+        var rows = ResultWriter.Write(reader, Console.Out, format, byteOrderMark);
 
         Console.Error.WriteLine($"\n({rows:N0} row(s))");
     }

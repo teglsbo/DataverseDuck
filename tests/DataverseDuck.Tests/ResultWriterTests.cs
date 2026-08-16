@@ -196,6 +196,54 @@ public class ResultWriterTests
         Assert.Contains("},", json);
     }
 
+    // ---------------------------------------------------------------- BOM
+
+    [Fact]
+    public void WritesNoByteOrderMarkByDefault()
+    {
+        // The Unicode Standard: "neither required nor recommended for UTF-8".
+        // Every comparable exporter (DuckDB, Postgres, pandas, PowerShell 7)
+        // defaults to none, and a stray BOM breaks 'grep ^id'.
+        Assert.DoesNotContain('\uFEFF', Write(OutputFormat.Csv, OneColumn("a")));
+    }
+
+    [Theory]
+    [InlineData(OutputFormat.Csv)]
+    [InlineData(OutputFormat.Tsv)]
+    public void PrefixesAByteOrderMarkWhenAsked(OutputFormat format)
+    {
+        using var reader = new DataTableReader(OneColumn("a"));
+        using var writer = new StringWriter();
+
+        ResultWriter.Write(reader, writer, format, byteOrderMark: true);
+
+        Assert.StartsWith("\uFEFFvalue", writer.ToString());
+    }
+
+    [Fact]
+    public void RefusesAByteOrderMarkOnJson()
+    {
+        // RFC 8259 section 8.1: "Implementations MUST NOT add a byte order mark
+        // to the beginning of a networked-transmitted JSON text."
+        using var reader = new DataTableReader(OneColumn("a"));
+        using var writer = new StringWriter();
+
+        var thrown = Assert.Throws<ArgumentException>(() =>
+            ResultWriter.Write(reader, writer, OutputFormat.Json, byteOrderMark: true));
+
+        Assert.Contains("8259", thrown.Message);
+    }
+
+    [Fact]
+    public void TheByteOrderMarkEncodesToTheThreeExpectedBytes()
+    {
+        // U+FEFF in UTF-8 is EF BB BF. Asserting the bytes, not the char,
+        // because that is what a consumer actually sees.
+        Assert.Equal(
+            new byte[] { 0xEF, 0xBB, 0xBF },
+            System.Text.Encoding.UTF8.GetBytes([ResultWriter.ByteOrderMark]));
+    }
+
     // ---------------------------------------------------------------- format flag
 
     [Theory]

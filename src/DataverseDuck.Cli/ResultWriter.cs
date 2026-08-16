@@ -59,11 +59,30 @@ public static class ResultWriter
         }
     }
 
+    /// <summary>
+    /// Excel on non-English Windows reads a BOM-less UTF-8 CSV as the ANSI code
+    /// page, so 'Åse' arrives as 'Ãse'. A BOM is the only signal it reliably
+    /// takes. Nothing else wants one: RFC 8259 forbids it for JSON, and it
+    /// breaks 'grep ^id' and any reader not opening with utf-8-sig.
+    /// </summary>
+    public const char ByteOrderMark = '\uFEFF';
+
     /// <summary>Writes <paramref name="reader"/> and returns the row count.</summary>
-    public static long Write(DbDataReader reader, TextWriter writer, OutputFormat format)
+    public static long Write(
+        DbDataReader reader, TextWriter writer, OutputFormat format, bool byteOrderMark = false)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(writer);
+
+        if (byteOrderMark)
+        {
+            if (format == OutputFormat.Json)
+                throw new ArgumentException(
+                    "JSON must not start with a byte order mark (RFC 8259 section 8.1).",
+                    nameof(byteOrderMark));
+
+            writer.Write(ByteOrderMark);
+        }
 
         return format switch
         {

@@ -222,6 +222,22 @@ Common to all: timestamps as `yyyy-MM-dd HH:mm:ss` (naive UTC, per ADR 0002), da
 `yyyy-MM-dd`, `byte[]` as hex, all numbers formatted invariantly so a decimal comma can
 never appear inside a CSV field.
 
+#### Byte order marks
+
+Output is UTF-8 **without** a BOM, and `--bom` adds one for `csv` and `tsv`.
+
+Opt-in rather than opt-out, because the evidence points that way: the Unicode Standard
+says a BOM is *"neither required nor recommended for UTF-8"*, RFC 8259 §8.1 says
+implementations **must not** add one to JSON (so `--bom --format json` is refused), and
+DuckDB, PostgreSQL, MySQL, pandas, Python's `csv`, Google Sheets and PowerShell 7 all
+write none. PowerShell moved *away* from BOMs in 6.0, as did .NET Core's `StreamWriter`.
+
+The exception is the one that matters here: **Excel on non-English Windows reads a
+BOM-less UTF-8 CSV as the ANSI code page**, so `Åse Ø Ærø` opens as `Ã…se Ã˜ Ã†rÃ¸`.
+If a human will double-click the file, pass `--bom`. If a program will read it, don't —
+a BOM makes `grep '^id'` match nothing and turns the first header into `\ufeffid` for any
+reader that doesn't open with `utf-8-sig`.
+
 For files, DuckDB can also write directly — `COPY (...) TO 'out.parquet' (FORMAT PARQUET)`
 works as the final statement of a plan, as does `FORMAT JSON` or `FORMAT CSV`.
 
