@@ -54,7 +54,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 Requires .NET 10.
 
 ```bash
-dotnet test          # 212 tests, no tenant required
+dotnet test          # 224 tests, no tenant required
 ```
 
 ### Connect to a real environment
