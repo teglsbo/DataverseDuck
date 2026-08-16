@@ -292,6 +292,69 @@ public class DataversePlanParserTests
 
         Assert.Equal("crm contact", plan.Steps[0].Name);
     }
+
+    /// <summary>
+    /// A structural failure is only detected at the end of input, which is
+    /// nowhere near the mistake. On a real multi-line plan the message alone
+    /// does not locate it, so the position and the offending line are the
+    /// whole value of the error.
+    /// </summary>
+    [Fact]
+    public void PointsAnUnclosedParenAtTheParenThatOpenedIt()
+    {
+        var error = Assert.Throws<FormatException>(() => DataversePlanParser.Parse("""
+            WITH logs AS JSON ('logs.json'),
+                 accts AS DATAVERSE (SELECT accountid FROM account
+            SELECT * FROM logs
+            """));
+
+        Assert.Contains("line 2, column 25", error.Message);
+        Assert.Contains("accts AS DATAVERSE (SELECT accountid FROM account", error.Message);
+        Assert.Contains("^", error.Message);
+    }
+
+    [Fact]
+    public void PutsTheCaretUnderTheOffendingCharacter()
+    {
+        var error = Assert.Throws<FormatException>(() => DataversePlanParser.Parse("""
+            WITH logs AS JSON ('logs.json'),
+                 accts DATAVERSE (SELECT accountid FROM account)
+            SELECT 1
+            """));
+
+        var lines = error.Message.Split('\n');
+        var source = Array.Find(lines, l => l.StartsWith("  2 | ", StringComparison.Ordinal))!;
+        var caret = lines[Array.IndexOf(lines, source) + 1];
+
+        // The caret must land on the token the parser rejected, not merely
+        // somewhere on the line.
+        Assert.Equal('D', source[caret.IndexOf('^')]);
+    }
+
+    [Fact]
+    public void SaysWhenAnUnterminatedLiteralIsProbablyAnEarlierQuote()
+    {
+        var error = Assert.Throws<FormatException>(() => DataversePlanParser.Parse("""
+            WITH logs AS JSON ('logs.json'),
+                 accts AS DATAVERSE (SELECT name FROM account WHERE name = 'Acme),
+                 more AS JSON ('x.json')
+            SELECT 1
+            """));
+
+        // Quotes pair left to right, so the literal that fails to close is not
+        // the one that was mistyped. Claiming otherwise would send the reader
+        // to a line that is fine.
+        Assert.Contains("an earlier quote is probably unclosed", error.Message);
+    }
+
+    [Fact]
+    public void ReportsTheFirstLineAsLineOne()
+    {
+        var error = Assert.Throws<FormatException>(
+            () => DataversePlanParser.Parse("WITH logs AS JSON ('a.json' SELECT 1"));
+
+        Assert.Contains("line 1, column 19", error.Message);
+    }
 }
 
 /// <summary>

@@ -79,12 +79,13 @@ public static class DataversePlanParser
         {
             SkipTrivia(sql, ref position);
 
+            var nameAt = position;
             var name = ReadName(sql, ref position);
             SkipTrivia(sql, ref position);
 
             if (!ReadKeyword(sql, ref position, "AS"))
             {
-                throw new FormatException($"Expected 'AS' after '{name}' in the WITH list.");
+                throw PlanSource.Error(sql, position, $"Expected 'AS' after '{name}' in the WITH list");
             }
 
             SkipTrivia(sql, ref position);
@@ -107,7 +108,7 @@ public static class DataversePlanParser
 
             if (position >= sql.Length || sql[position] != '(')
             {
-                throw new FormatException($"Expected '(' after '{name} AS'.");
+                throw PlanSource.Error(sql, position, $"Expected '(' after '{name} AS'");
             }
 
             var body = ReadBalanced(sql, ref position);
@@ -116,9 +117,9 @@ public static class DataversePlanParser
             {
                 if (hint.Length > 0)
                 {
-                    throw new FormatException(
+                    throw PlanSource.Error(sql, nameAt,
                         $"'{name}' is a {stepKind.ToString().ToUpperInvariant()} entry, so MATERIALIZED " +
-                        "does not apply -- it is always materialised before the query runs.");
+                        "does not apply -- it is always materialised before the query runs");
                 }
 
                 var content = stepKind == PlanStepKind.Json
@@ -303,7 +304,7 @@ public static class DataversePlanParser
             var closing = sql.IndexOf('"', position + 1);
             if (closing < 0)
             {
-                throw new FormatException("Unterminated quoted name in the WITH list.");
+                throw PlanSource.Error(sql, position, "Unterminated quoted name in the WITH list");
             }
 
             var quoted = sql[(position + 1)..closing];
@@ -319,7 +320,7 @@ public static class DataversePlanParser
 
         if (position == start)
         {
-            throw new FormatException($"Expected a name at offset {start} in the WITH list.");
+            throw PlanSource.Error(sql, start, "Expected a name in the WITH list");
         }
 
         return sql[start..position];
@@ -355,6 +356,7 @@ public static class DataversePlanParser
     private static string ReadBalanced(string sql, ref int position)
     {
         var depth = 0;
+        var open = position;
         var body = new StringBuilder();
 
         while (position < sql.Length)
@@ -397,7 +399,7 @@ public static class DataversePlanParser
             body.Append(c);
         }
 
-        throw new FormatException("Unbalanced parentheses in the WITH list.");
+        throw PlanSource.Error(sql, open, "Unbalanced parentheses in the WITH list");
     }
 
     private static string ReadQuoted(string sql, ref int position)
@@ -424,7 +426,15 @@ public static class DataversePlanParser
             position++;
         }
 
-        throw new FormatException("Unterminated string literal in the WITH list.");
+        // Quotes pair left to right, so an earlier stray quote shifts every
+        // pairing after it and the one that fails to close is rarely the one
+        // that was mistyped. Say so, rather than pointing confidently at a
+        // literal the reader can see is fine.
+        var spansLines = sql.AsSpan(start).Contains('\n');
+
+        throw PlanSource.Error(sql, start,
+            "Unterminated string literal in the WITH list" +
+            (spansLines ? "; it runs to the end of the plan, so an earlier quote is probably unclosed" : string.Empty));
     }
 
     private static bool IsCommentStart(string sql, int position) =>
@@ -454,7 +464,7 @@ public static class DataversePlanParser
                 var close = sql.IndexOf("*/", position + 2, StringComparison.Ordinal);
                 if (close < 0)
                 {
-                    throw new FormatException("Unterminated block comment in the WITH list.");
+                    throw PlanSource.Error(sql, position, "Unterminated block comment in the WITH list");
                 }
 
                 position = close + 2;
@@ -463,5 +473,78 @@ public static class DataversePlanParser
 
             return;
         }
+    }
+}
+
+/// <summary>
+/// Points a parse error at the text that caused it.
+///
+/// The structural failures -- an unclosed paren, an unterminated literal --
+/// are only detected at end of input, which is nowhere near the mistake. On a
+/// one-line plan the message alone is enough; on a thirty-line one it is not,
+/// and the offending character is exactly what the reader needs to see. So the
+/// offset reported is where the broken construct <em>opened</em>, not where
+/// the parser gave up.
+/// </summary>
+internal static class PlanSource
+{
+    /// <summary>Builds an exception carrying the position and an excerpt with a caret.</summary>
+    public static FormatException Error(string sql, int offset, string message)
+    {
+        var (line, column) = LineAndColumn(sql, offset);
+        return new FormatException($"{message} (line {line}, column {column})\n\n{Excerpt(sql, offset)}");
+    }
+
+    private static (int Line, int Column) LineAndColumn(string sql, int offset)
+    {
+        offset = Math.Clamp(offset, 0, Math.Max(sql.Length - 1, 0));
+
+        var line = 1;
+        var lineStart = 0;
+
+        for (var i = 0; i < offset && i < sql.Length; i++)
+        {
+            if (sql[i] != '\n')
+            {
+                continue;
+            }
+
+            line++;
+            lineStart = i + 1;
+        }
+
+        return (line, offset - lineStart + 1);
+    }
+
+    /// <summary>The offending line, with a caret under the offending character.</summary>
+    private static string Excerpt(string sql, int offset)
+    {
+        if (sql.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        offset = Math.Clamp(offset, 0, sql.Length - 1);
+
+        var start = sql.LastIndexOf('\n', Math.Max(offset - 1, 0)) + 1;
+        if (offset == 0)
+        {
+            start = 0;
+        }
+
+        var end = sql.IndexOf('\n', offset);
+        if (end < 0)
+        {
+            end = sql.Length;
+        }
+
+        var (line, column) = LineAndColumn(sql, offset);
+        var gutter = $"  {line} | ";
+        var text = sql[start..end].TrimEnd('\r');
+
+        // Tabs would put the caret in the wrong place, so render them as one space.
+        text = text.Replace('\t', ' ');
+
+        return $"{gutter}{text}\n{new string(' ', gutter.Length + column - 1)}^";
     }
 }
