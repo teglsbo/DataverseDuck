@@ -54,16 +54,11 @@ internal static class Program
 
             Options for 'query':
               --plan <sql>             A WITH block naming its own sources and the query, in
-                                       one statement. This is the main form.
+                                       one statement.
               --plan-file <path>       Read that plan from a file instead.
               --db <path>              DuckDB file. Default: in-memory.
               --strict                 Fail if any operation would run locally rather than
                                        inside Dataverse. Default: warn but continue.
-
-            Older flag form, equivalent but with the order left implicit:
-              --json <view>=<path>     Expose a JSON file or glob as a view. Repeatable.
-              --cache <table>=<sql>    Run SQL against Dataverse into a DuckDB table. Repeatable.
-              --run <sql>              The query to print results for.
 
             Example -- how many contacts had webchat messages:
               dvduck query --plan "
@@ -288,8 +283,6 @@ internal static class Program
 
     private static int Query(string[] args)
     {
-        List<(string Table, string Sql)> caches = [];
-        List<(string View, string Path)> jsons = [];
         List<PlanStep> steps = [];
         string? finalSql = null;
         string? plan = null;
@@ -298,7 +291,7 @@ internal static class Program
 
         for (var i = 0; i < args.Length; i++)
         {
-            var needsValue = args[i] is "--cache" or "--json" or "--run" or "--db" or "--plan" or "--plan-file";
+            var needsValue = args[i] is "--db" or "--plan" or "--plan-file";
 
             if (needsValue && i + 1 >= args.Length)
             {
@@ -309,20 +302,18 @@ internal static class Program
             switch (args[i])
             {
                 case "--cache":
-                    if (!TrySplitPair(args[++i], out var table, out var sql))
-                        return 2;
-                    caches.Add((table, sql));
-                    break;
-
                 case "--json":
-                    if (!TrySplitPair(args[++i], out var view, out var path))
-                        return 2;
-                    jsons.Add((view, path));
-                    break;
-
                 case "--run":
-                    finalSql = args[++i];
-                    break;
+                    Console.Error.WriteLine(
+                        $"{args[i]} was removed. A query now names its own sources in one --plan:");
+                    Console.Error.WriteLine();
+                    Console.Error.WriteLine("  dvduck query --plan \"");
+                    Console.Error.WriteLine("    WITH logs AS JSON ('webchat/*.json'),");
+                    Console.Error.WriteLine("         crm_contact AS DATAVERSE (SELECT ... WHERE id IN {{SELECT ... FROM logs}})");
+                    Console.Error.WriteLine("    SELECT ...\"");
+                    Console.Error.WriteLine();
+                    Console.Error.WriteLine("Entries run top to bottom, so the order is stated rather than implied.");
+                    return 2;
 
                 case "--plan":
                     plan = args[++i];
@@ -353,37 +344,21 @@ internal static class Program
             }
         }
 
-        if (plan is not null)
+        if (plan is null)
         {
-            if (caches.Count > 0 || jsons.Count > 0 || finalSql is not null)
-            {
-                Console.Error.WriteLine("--plan already names its own sources; drop --json, --cache and --run.");
-                return 2;
-            }
-
-            try
-            {
-                var parsed = DataversePlanParser.Parse(plan);
-                steps.AddRange(parsed.Steps);
-                finalSql = parsed.FinalSql;
-            }
-            catch (FormatException e)
-            {
-                Console.Error.WriteLine($"Could not read the plan: {e.Message}");
-                return 2;
-            }
-        }
-        else
-        {
-            // The flag form has a fixed order: JSON views first, so that a
-            // --cache statement's {{ }} can read them.
-            steps.AddRange(jsons.Select(j => new PlanStep(PlanStepKind.Json, j.View, j.Path)));
-            steps.AddRange(caches.Select(c => new PlanStep(PlanStepKind.Dataverse, c.Table, c.Sql)));
+            Console.Error.WriteLine("Nothing to run. Pass --plan \"WITH ...\" or --plan-file <path>.");
+            return 2;
         }
 
-        if (finalSql is null)
+        try
         {
-            Console.Error.WriteLine("Nothing to run. Pass --run \"SELECT ...\" or --plan \"WITH ...\".");
+            var parsed = DataversePlanParser.Parse(plan);
+            steps.AddRange(parsed.Steps);
+            finalSql = parsed.FinalSql;
+        }
+        catch (FormatException e)
+        {
+            Console.Error.WriteLine($"Could not read the plan: {e.Message}");
             return 2;
         }
 
@@ -480,23 +455,6 @@ internal static class Program
             dataverse?.Dispose();
             client?.Dispose();
         }
-    }
-
-    /// <summary>Splits <c>name=value</c>, keeping any '=' inside the value.</summary>
-    private static bool TrySplitPair(string argument, out string name, out string value)
-    {
-        var separator = argument.IndexOf('=');
-
-        if (separator > 0)
-        {
-            name = argument[..separator];
-            value = argument[(separator + 1)..];
-            return true;
-        }
-
-        Console.Error.WriteLine($"Expected name=value but got '{argument}'.");
-        name = value = string.Empty;
-        return false;
     }
 
     /// <summary>
