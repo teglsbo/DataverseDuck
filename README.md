@@ -44,7 +44,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 | `dvduck doctor` / `dvduck capture` CLI | ✅ Built, 25 tests |
 | `DataverseSchemaMapper` (reader → DDL) | ✅ Built, 26 tests |
 | `DuckDbBulkLoader` (reader → Appender) | ✅ Built, 10 tests |
-| Execution plan logging | ❌ Not started |
+| `ExecutionPlanAnalyzer` (folding guard) | ✅ Built, 27 tests |
 | 429 / paging resilience | ❌ Not started |
 | Cache manifest + refresh | ❌ Not started |
 | Verified against a live environment | ❌ **Blocked on a tenant** |
@@ -54,7 +54,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 Requires .NET 10.
 
 ```bash
-dotnet test          # 91 tests, no tenant required
+dotnet test          # 118 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -95,6 +95,24 @@ JOIN crm_accounts a ON a.accountid = CAST(j.account_id AS UUID)
 GROUP BY a.name, j.level;
 ```
 
+## The folding guard
+
+SQL 4 CDS pushes joins and filters into Dataverse as FetchXML where it can, and **silently
+falls back** to fetching both tables and joining locally where it cannot. Results stay
+correct; the query just starts moving millions of rows across the network.
+
+Because the plan can be compiled without executing it, this is caught before it costs
+anything:
+
+```csharp
+var analyzer = new ExecutionPlanAnalyzer { LargeRowThreshold = 10_000 };
+analyzer.Enforce(command, FoldingPolicy.RejectCritical, log: Console.Error.WriteLine);
+```
+
+Severity scales with estimated rows: a client-side join over 200 rows is irrelevant, the
+same plan over 2,000,000 rows is the failure this project exists to avoid. See
+[ADR 0004](docs/adr/0004-execution-plan-folding-guard.md).
+
 ## Timestamps
 
 Timestamp handling is the sharpest edge in this project, because Dataverse, DuckDB and
@@ -127,10 +145,11 @@ src/DataverseDuck/          Library
   Sql4CdsConnectionFactory.cs
   Configuration/            Connection settings and validation
   Schema/                   Reader -> DuckDB DDL, and the bulk loader
+  Plans/                    Execution plan analysis and the folding guard
   Diagnostics/              Environment checks behind 'dvduck doctor'
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
-tests/DataverseDuck.Tests/  91 tests, no tenant required
+tests/DataverseDuck.Tests/  118 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/sql4cds-behaviour.md   Measured engine defaults and type mapping

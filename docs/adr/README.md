@@ -13,6 +13,7 @@ Measured facts that are not themselves decisions live in
 | [0001](0001-sql4cds-over-tds-and-odata.md) | Use SQL 4 CDS rather than the TDS endpoint or a DuckDB OData extension | Accepted |
 | [0002](0002-utc-naive-timestamps.md) | Store every timestamp as a naive UTC `TIMESTAMP` | Accepted |
 | [0003](0003-metadata-snapshot-for-offline-work.md) | Capture Dataverse metadata to a snapshot for offline work | Accepted |
+| [0004](0004-execution-plan-folding-guard.md) | Analyse the execution plan and refuse queries that do not fold | Accepted |
 
 ## Why there is no CHANGELOG
 
