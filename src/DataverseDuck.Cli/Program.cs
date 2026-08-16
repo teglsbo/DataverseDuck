@@ -269,10 +269,21 @@ internal static class Program
                 Log = message => Console.Error.WriteLine($"  {message}"),
             };
 
+            using var cancellation = new CancellationTokenSource();
+
+            // Ctrl-C rolls the load back rather than killing the process
+            // mid-append, so the database is never left holding part of a table.
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                Console.Error.WriteLine("Cancelling; the current load will be rolled back.");
+                cancellation.Cancel();
+            };
+
             foreach (var (name, statement) in caches)
             {
                 Console.Error.WriteLine($"Caching {name}...");
-                Console.Error.WriteLine($"  {cache.Cache(statement, name)}");
+                Console.Error.WriteLine($"  {cache.Cache(statement, name, cancellation.Token)}");
             }
 
             foreach (var (name, location) in jsons)
@@ -281,6 +292,17 @@ internal static class Program
             using var reader = cache.Query(finalSql);
             WriteTable(reader);
             return 0;
+        }
+        catch (DataverseThrottledException e)
+        {
+            Console.Error.WriteLine($"Throttled: {e.Message}");
+            Console.Error.WriteLine("Nothing was written; any previously cached copy is unchanged.");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Cancelled. Nothing was written.");
+            return 130;
         }
         catch (PlanNotFoldedException e)
         {

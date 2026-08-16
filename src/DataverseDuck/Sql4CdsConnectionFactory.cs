@@ -58,6 +58,7 @@ public static class Sql4CdsConnectionFactory
         ArgumentException.ThrowIfNullOrWhiteSpace(clientSecret);
 
         var client = new ServiceClient(environmentUrl, clientId, clientSecret, useUniqueInstance: true);
+        ConfigureForBulkExport(client);
 
         if (!client.IsReady)
             throw new InvalidOperationException(
@@ -82,4 +83,42 @@ public static class Sql4CdsConnectionFactory
         // the guarantee in ADR 0002. A wrong timestamp does not throw.
         connection.UseLocalTimeZone = false;
     }
+
+    /// <summary>
+    /// Tunes the SDK client for long exports.
+    ///
+    /// We deliberately add no retry logic of our own. <c>ServiceClient</c> has
+    /// paused for the server's <c>Retry-After</c> duration and resent the
+    /// request since 2019; wrapping that in a second retry loop would make the
+    /// total attempts the product of the two and the total wait far longer than
+    /// the server asked for. We raise its limits instead of duplicating it.
+    ///
+    /// The timeout matters most. It is a <b>static</b> property defaulting to
+    /// four minutes, which is per-request rather than per-export, but a single
+    /// FetchXML page over a wide or heavily filtered large table can exceed it.
+    /// </summary>
+    public static void ConfigureForBulkExport(ServiceClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+
+        // Static, so this affects every client in the process. That is the
+        // intent for a CLI whose whole job is exporting.
+        if (ServiceClient.MaxConnectionTimeout < BulkExportTimeout)
+            ServiceClient.MaxConnectionTimeout = BulkExportTimeout;
+
+        client.MaxRetryCount = BulkExportRetryCount;
+
+        // Only a floor. When the server sends Retry-After the SDK honours that
+        // instead, which is the value we actually want to obey.
+        client.RetryPauseTime = BulkExportRetryPause;
+    }
+
+    /// <summary>Per-request ceiling. The SDK default of four minutes is too tight for wide pages.</summary>
+    public static readonly TimeSpan BulkExportTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>Retries per request, performed by the SDK rather than by us.</summary>
+    public const int BulkExportRetryCount = 10;
+
+    /// <summary>Floor between retries when the server does not specify one.</summary>
+    public static readonly TimeSpan BulkExportRetryPause = TimeSpan.FromSeconds(5);
 }

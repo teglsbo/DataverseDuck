@@ -95,15 +95,25 @@ public sealed class DataverseCache
 
         var stopwatch = Stopwatch.StartNew();
 
-        var result = _source.Query(sql, reader =>
-            new DuckDbBulkLoader(Connection).Load(
-                reader, tableName, Mapper,
-                progress: rows => Log?.Invoke($"{tableName}: {rows:N0} rows"),
-                cancellationToken));
+        try
+        {
+            var result = _source.Query(sql, reader =>
+                new DuckDbBulkLoader(Connection).Load(
+                    reader, tableName, Mapper,
+                    progress: rows => Log?.Invoke($"{tableName}: {rows:N0} rows"),
+                    cancellationToken));
 
-        stopwatch.Stop();
+            stopwatch.Stop();
 
-        return new CacheResult(tableName, result.RowCount, result.Mapping, plan, stopwatch.Elapsed);
+            return new CacheResult(tableName, result.RowCount, result.Mapping, plan, stopwatch.Elapsed);
+        }
+        catch (Exception e) when (DataverseThrottling.Explain(e) is { } explanation)
+        {
+            // The load rolled back, so the previous table is intact. Say which
+            // limit was hit, because the three have different remedies and the
+            // raw fault only carries a number.
+            throw new DataverseThrottledException(explanation, e);
+        }
     }
 
     /// <summary>

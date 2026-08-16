@@ -20,6 +20,13 @@ public sealed class DuckDbBulkLoader(DuckDBConnection connection)
 
     /// <summary>
     /// Creates the table from the reader's schema and loads every row.
+    ///
+    /// All or nothing: the table is created and filled inside a transaction, so
+    /// a network drop, a service protection error that outlives the SDK's
+    /// retries, or a cancellation leaves the previous table exactly as it was.
+    /// Without this, a load that died at row 1.9M of 2M left a queryable table
+    /// holding 1.9M rows and nothing to say it was short — and destroyed the
+    /// good copy that was there before. Measured, not theorised.
     /// </summary>
     /// <returns>The mapping used, and how many rows were written.</returns>
     public LoadResult Load(
@@ -34,13 +41,18 @@ public sealed class DuckDbBulkLoader(DuckDBConnection connection)
         mapper ??= new DataverseSchemaMapper();
         var mapping = mapper.MapReader(reader, tableName);
 
+        using var transaction = _connection.BeginTransaction();
+
         using (var create = _connection.CreateCommand())
         {
+            create.Transaction = transaction;
             create.CommandText = mapping.ToCreateTableSql();
             create.ExecuteNonQuery();
         }
 
         var rows = LoadInto(reader, mapping, progress, cancellationToken);
+
+        transaction.Commit();
         return new LoadResult(mapping, rows);
     }
 
