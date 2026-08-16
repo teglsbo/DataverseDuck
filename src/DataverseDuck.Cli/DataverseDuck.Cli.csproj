@@ -31,4 +31,8 @@
     <ProjectReference Include="../DataverseDuck/DataverseDuck.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="DataverseDuck.Tests" />
+  </ItemGroup>
+
 </Project>

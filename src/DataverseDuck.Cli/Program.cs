@@ -232,20 +232,14 @@ internal static class Program
 
     private static int Capture(string[] args)
     {
-        var outIndex = Array.FindIndex(args, a => a is "--out" or "-o");
-        var path = outIndex >= 0 && outIndex + 1 < args.Length
-            ? args[outIndex + 1]
-            : Path.Combine("metadata", "snapshot.bin");
-
-        var tables = args
-            .Where((a, i) => i != outIndex && i != outIndex + 1 && !a.StartsWith('-'))
-            .ToArray();
-
-        if (tables.Length == 0)
+        if (!CaptureArguments.TryParse(args, out var parsed, out var parseError))
         {
-            Console.Error.WriteLine("Specify at least one table, for example: dvduck capture account contact");
+            Console.Error.WriteLine(parseError);
             return 2;
         }
+
+        var tables = parsed!.Tables.ToArray();
+        var path = parsed.Path;
 
         if (!TryLoadOptions(out var options))
             return 2;

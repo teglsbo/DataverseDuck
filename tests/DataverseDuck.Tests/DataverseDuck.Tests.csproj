@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DataverseDuck\DataverseDuck.csproj" />
+    <ProjectReference Include="..\..\src\DataverseDuck.Cli\DataverseDuck.Cli.csproj" />
   </ItemGroup>
 
 </Project>

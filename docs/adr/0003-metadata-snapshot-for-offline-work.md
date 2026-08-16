@@ -10,7 +10,7 @@ lookups and relationships through `IAttributeMetadataCache` in order to build Fe
 That means metadata is required at *compile* time, not just at execution time.
 
 We want development and CI to work without a live Dataverse environment — for speed, for
-offline work, and because a tenant is not yet available.
+offline work, and (when this was written) because no tenant was available yet.
 
 ## Options considered
 
@@ -90,13 +90,36 @@ Round-trip fidelity is verified by tests covering private-setter properties
 - Snapshots go stale as schema changes. A re-capture command and a drift check are needed.
 - Snapshots may embed schema details about a customer environment. They are gitignored
   (`metadata/*.bin`) by default; treat them as potentially sensitive.
-- Capture is currently unverified against a real environment — the tests exercise the
-  serialization mechanism and the request shape with a fake `IOrganizationService`, not a
-  real metadata graph, which is far larger and more interconnected.
+- **The CLI can write a snapshot but cannot read one back.** `dvduck capture` produces the
+  file and `MetadataSnapshot.Load` consumes it, but `dvduck query` has no `--snapshot`
+  option, so the offline path this ADR exists to enable is reachable only from the library.
+  Note also that `metadata.*` schema queries fail against a snapshot regardless (ADR 0010
+  notes the engine calls the service for those), so a snapshot serves compilation, not
+  schema browsing.
+- Snapshots must be re-captured after schema changes; there is still no drift check.
+
+## Verification against a real environment
+
+Done, and it found a bug. Capturing `account` and `contact` from a live environment:
+
+| | |
+|---|---|
+| Entities / size | 2 entities, 2,070.9 KB |
+| Capture time | 3.7 s wall clock, cold |
+| Attributes | `account` 215, `contact` 311 |
+| Survives round trip | `PrimaryIdAttribute`, `PrimaryNameAttribute`, and critically `DateTimeBehavior` (`birthdate` → `DateOnly`) |
+
+`DateTimeBehavior` surviving matters: it is what ADR 0010 resolves wall-clock columns
+from, so the offline path maps `birthdate` to `DATE` exactly as the live path does.
+
+The bug: `dvduck capture account contact` captured **only `contact`**, reporting
+"1 table(s)" without complaint. The argument filter excluded `outIndex` and `outIndex + 1`,
+but with no `--out` present `outIndex` was `-1`, so `-1 + 1` selected the first real
+argument. Silent partial capture — the failure mode this ADR's "Negative" section warns
+about, produced by the tool itself. Fixed by extracting `CaptureArguments`, which is
+tested; the CLI had had no tests at all, which is why an off-by-one in argument parsing
+reached a live run.
 
 ## Follow-ups
-
-- Verify against a real environment as soon as one exists, especially graph size and
-  serialization time.
 - Add a `capture` CLI command and a staleness check.
 - Reconsider XrmMockup for simulating data and plugin behaviour once metadata is solved.
