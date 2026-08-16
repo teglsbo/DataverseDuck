@@ -72,6 +72,14 @@ public static class Sql4CdsConnectionFactory
         connection.ApplicationName = string.IsNullOrWhiteSpace(applicationName)
             ? DefaultApplicationName
             : applicationName;
+
+        // Measured default is true, so this must be set explicitly rather than
+        // left alone: the TDS endpoint cannot authenticate a service principal.
         connection.UseTDSEndpoint = useTdsEndpoint;
+
+        // Measured default is already false, but it is set explicitly because a
+        // change here would silently shift every datetime out of UTC and break
+        // the guarantee in ADR 0002. A wrong timestamp does not throw.
+        connection.UseLocalTimeZone = false;
     }
 }

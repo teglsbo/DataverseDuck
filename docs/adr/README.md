@@ -5,6 +5,8 @@ Each one states what was decided, what was rejected, and — importantly — the
 
 Where a decision rests on how a library actually behaves rather than how it is
 documented, the ADR cites a spike in [`../../spikes`](../../spikes) that measured it.
+Measured facts that are not themselves decisions live in
+[`../sql4cds-behaviour.md`](../sql4cds-behaviour.md).
 
 | ADR | Decision | Status |
 |---|---|---|

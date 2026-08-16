@@ -42,8 +42,8 @@ Early. The foundations are built and tested; nothing has run against a real tena
 | `Sql4CdsConnectionFactory` | ✅ Built |
 | `MetadataSnapshot` / `SnapshotMetadataCache` / `MetadataCapture` | ✅ Built, 12 tests |
 | `dvduck doctor` / `dvduck capture` CLI | ✅ Built, 25 tests |
-| Schema mapper (`DbDataReader` → DDL) | ⏳ Prototyped in spike |
-| Bulk loader (reader → Appender) | ⏳ Prototyped in spike |
+| `DataverseSchemaMapper` (reader → DDL) | ✅ Built, 26 tests |
+| `DuckDbBulkLoader` (reader → Appender) | ✅ Built, 10 tests |
 | Execution plan logging | ❌ Not started |
 | 429 / paging resilience | ❌ Not started |
 | Cache manifest + refresh | ❌ Not started |
@@ -54,7 +54,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 Requires .NET 10.
 
 ```bash
-dotnet test          # 55 tests, no tenant required
+dotnet test          # 91 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -126,12 +126,14 @@ src/DataverseDuck/          Library
   UtcTimestampPolicy.cs     Timestamp rules and guard rails
   Sql4CdsConnectionFactory.cs
   Configuration/            Connection settings and validation
+  Schema/                   Reader -> DuckDB DDL, and the bulk loader
   Diagnostics/              Environment checks behind 'dvduck doctor'
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
-tests/DataverseDuck.Tests/  55 tests, no tenant required
+tests/DataverseDuck.Tests/  91 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
+docs/sql4cds-behaviour.md   Measured engine defaults and type mapping
 docs/adr/                   Architecture decision records
 ```
 
