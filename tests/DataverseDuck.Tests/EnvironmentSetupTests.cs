@@ -110,7 +110,8 @@ public class DataverseOptionsTests
         Assert.True(DataverseOptions.TryCreate(
             "https://contoso.crm4.dynamics.com", ValidClientId, "s3cret", null, out var options, out _));
 
-        var connectionString = options.ToConnectionString();
+        var credential = Assert.IsType<ClientSecretCredential>(options.Credential);
+        var connectionString = credential.ToConnectionString(options);
         Assert.Contains("AuthType=ClientSecret", connectionString);
         Assert.Contains("s3cret", connectionString);
         Assert.Contains("RequireNewInstance=true", connectionString);

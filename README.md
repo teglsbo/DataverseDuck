@@ -49,6 +49,7 @@ Working end to end against a real Dataverse environment.
 | `DataversePlanParser` (the `WITH` form) | ✅ Built, 28 tests |
 | `DataverseCache` / key-set pushdown | ✅ Built, 28 tests |
 | `.env` loading, `dvduck doctor` remedies | ✅ Built, 17 tests |
+| Named profiles / certificate credentials | ✅ Built, 25 tests; certificate path unverified live |
 | `DataverseThrottling` (429 explanation) | ✅ Built, 9 tests; could not be provoked live, see below |
 | `ServiceProtectionBudget` (limit headers) | ✅ Built, 13 tests, verified live |
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
@@ -56,9 +57,13 @@ Working end to end against a real Dataverse environment.
 
 ### Open
 
-- [ ] **Configurable connections.** `AuthType=ClientSecret` is hardcoded, there is no
-      certificate credential, and targeting a second environment means editing `.env`.
-      Named profiles would fix both.
+- [ ] **Verify certificate authentication against a live environment.** Implemented and
+      unit tested against a generated certificate, but this project's tenant
+      authenticates with a secret, so the SDK's certificate constructor has never
+      actually run against Dataverse.
+- [ ] **Settle the name.** The repository is `dataverse-duck`, the tool is `dvduck`, the
+      packages are `DataverseDuck` and `DataverseDuck.Cli`. `PackageId` and
+      `ToolCommandName` are hard to change after a first release.
 - [ ] **A REPL.** The CLI is one-shot today. A REPL holding the DuckDB connection open
       would let you fetch once and iterate locally, with completion sourced from the
       metadata snapshot offline and from `information_schema` for cached tables.
@@ -100,7 +105,7 @@ debugging session to trace, so consumers are told at build time instead of at ru
 Requires .NET 10.
 
 ```bash
-dotnet test          # 243 tests, no tenant required
+dotnet test          # 320 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -116,6 +121,23 @@ dotnet run --project src/DataverseDuck.Cli -- doctor account contact
 `doctor` exists because Dataverse setup failures are opaque — a missing application user
 and a missing security role both surface as a bare authentication error, but the fixes are
 in different places. It checks each link in the chain and tells you which one broke.
+
+Authenticate with a client secret (`DATAVERSE_CLIENT_SECRET`) or a certificate
+(`DATAVERSE_CERT_PATH`, or `DATAVERSE_CERT_THUMBPRINT` for the platform store). Setting
+two is refused rather than ranked, so a leftover secret cannot quietly win over a
+certificate you just switched to.
+
+For more than one environment, prefix any variable with a profile name:
+
+```bash
+export DATAVERSE_PROD_URL="https://yourorg.crm4.dynamics.com"
+dvduck doctor --profile prod
+```
+
+Anything the profile does not set falls back to the unprefixed variable, so environments
+sharing one app registration need only override the URL. `doctor` prints which profile it
+used, because a typo in the name otherwise looks like a profile with no overrides and
+quietly gives you the default environment.
 
 ### Ask a question
 
@@ -401,7 +423,7 @@ src/DataverseDuck/          Library
   Diagnostics/              Environment checks behind 'dvduck doctor'
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
-tests/DataverseDuck.Tests/  243 tests, no tenant required
+tests/DataverseDuck.Tests/  320 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/large-tables.md        Measured limits, and where key-set pushdown stops paying

@@ -116,11 +116,7 @@ public sealed record ServiceProtectionBudget
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        var application = ConfidentialClientApplicationBuilder
-            .Create(options.ClientId)
-            .WithClientSecret(options.ClientSecret)
-            .WithAuthority(options.Authority)
-            .Build();
+        var application = options.CreateConfidentialClient();
 
         var token = await application
             .AcquireTokenForClient([options.Scope])

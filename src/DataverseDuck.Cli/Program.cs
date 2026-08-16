@@ -30,6 +30,12 @@ internal static class Program
         // win, so this cannot override a secret injected by CI.
         EnvFile = DotEnvFile.LoadFromCurrentDirectory();
 
+        if (!TryTakeProfile(ref args, out var profileError))
+        {
+            Console.Error.WriteLine(profileError);
+            return 2;
+        }
+
         return command switch
         {
             "doctor" => await DoctorAsync(args.Skip(1).ToArray()),
@@ -58,12 +64,28 @@ internal static class Program
             Configuration (environment variables):
               DATAVERSE_URL            https://yourorg.crm4.dynamics.com
               DATAVERSE_CLIENT_ID      Application (client) ID of the app registration
-              DATAVERSE_CLIENT_SECRET  Client secret *value*
               DATAVERSE_TENANT_ID      Directory (tenant) ID from Entra ID -- not the environment
                                        or organization ID shown in the admin centre.
                                        Optional but recommended.
 
+            Credentials (set exactly one):
+              DATAVERSE_CLIENT_SECRET  Client secret *value*, not the secret ID.
+              DATAVERSE_CERT_PATH      PKCS#12 (.pfx) file holding the certificate and its
+                                       private key. DATAVERSE_CERT_PASSWORD if protected.
+              DATAVERSE_CERT_THUMBPRINT
+                                       A certificate already in the platform store. On Linux
+                                       that store is a per-user directory that nothing fills
+                                       in by default, so prefer a file there.
+
+            Profiles:
+              Prefix any of the above with a profile name to address a second environment:
+              DATAVERSE_PROD_URL, DATAVERSE_PROD_CLIENT_SECRET, and so on. Select it with
+              --profile prod, or by setting DATAVERSE_PROFILE. Anything the profile does not
+              set falls back to the unprefixed variable, so environments that share one app
+              registration need only override the URL.
+
             Options:
+              --profile <name>         Use the variables prefixed with that name.
               --out <path>             Snapshot path for 'capture'. Default: metadata/snapshot.bin
 
             Options for 'query':
@@ -185,7 +207,7 @@ internal static class Program
 
     private static bool TryLoadOptions(out DataverseOptions options)
     {
-        if (DataverseOptions.TryLoadFromEnvironment(out var loaded, out var error))
+        if (DataverseOptions.TryLoadFromEnvironment(Profile, out var loaded, out var error))
         {
             options = loaded;
             return true;
@@ -201,9 +223,56 @@ internal static class Program
                 ? $"No {DotEnvFile.FileName} was found in this directory or above it."
                 : $"Read {EnvFile}. Variables already exported take precedence over it.");
 
+        if (Profile is not null)
+        {
+            // Fallback to the unprefixed variables is deliberate, but it makes
+            // a typo in the profile name look like the profile simply having
+            // no overrides, so say which one was asked for.
+            Console.Error.WriteLine(
+                $"Profile '{Profile}' was selected; its variables are named " +
+                $"{DataverseOptions.VariableName(DataverseOptions.UrlVariable, Profile)} and so on, " +
+                "falling back to the unprefixed ones.");
+        }
+
         Console.Error.WriteLine("Run 'dvduck help' for the variables, or see docs/environment-setup.md.");
         options = null!;
         return false;
+    }
+
+    /// <summary>
+    /// The profile named by --profile, if any. Null means the unprefixed
+    /// variables, or whatever DATAVERSE_PROFILE says.
+    /// </summary>
+    private static string? Profile;
+
+    /// <summary>
+    /// Removes '--profile name' from anywhere in the argument list, so that it
+    /// works on every subcommand without each parser having to know about it.
+    /// </summary>
+    private static bool TryTakeProfile(ref string[] args, out string? error)
+    {
+        error = null;
+        var kept = new List<string>(args.Length);
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (!string.Equals(args[i], "--profile", StringComparison.OrdinalIgnoreCase))
+            {
+                kept.Add(args[i]);
+                continue;
+            }
+
+            if (i + 1 >= args.Length)
+            {
+                error = "--profile needs a name, for example '--profile prod'.";
+                return false;
+            }
+
+            Profile = args[++i];
+        }
+
+        args = [.. kept];
+        return true;
     }
 
     /// <summary>
@@ -325,7 +394,7 @@ internal static class Program
 
         try
         {
-            using var client = new ServiceClient(options.ToConnectionString());
+            using var client = options.CreateServiceClient();
 
             if (!client.IsReady)
             {
@@ -470,7 +539,7 @@ internal static class Program
                 if (!TryLoadOptions(out var options))
                     return 2;
 
-                client = new ServiceClient(options.ToConnectionString());
+                client = options.CreateServiceClient();
 
                 if (!client.IsReady)
                 {

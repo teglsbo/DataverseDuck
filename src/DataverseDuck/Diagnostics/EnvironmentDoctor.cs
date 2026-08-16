@@ -31,11 +31,7 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
     {
         var checks = new List<CheckResult>
         {
-            CheckResult.Pass(
-                "Configuration",
-                $"url={_options.EnvironmentUrl} clientId={_options.ClientId} " +
-                $"tenant={_options.TenantId ?? "(organizations)"} " +
-                $"secret={AccessTokenClaims.Mask(_options.ClientSecret)}"),
+            CheckResult.Pass("Configuration", _options.Describe()),
         };
 
         checks.Add(await CheckEnvironmentTenantAsync(cancellationToken));
@@ -112,11 +108,7 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
         const string name = "Token acquisition";
         try
         {
-            var app = ConfidentialClientApplicationBuilder
-                .Create(_options.ClientId)
-                .WithClientSecret(_options.ClientSecret)
-                .WithAuthority(_options.Authority)
-                .Build();
+            var app = _options.CreateConfidentialClient();
 
             var result = await app
                 .AcquireTokenForClient([_options.Scope])
@@ -198,7 +190,7 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
         const string name = "WhoAmI (application user)";
         try
         {
-            var client = new ServiceClient(_options.ToConnectionString());
+            var client = _options.CreateServiceClient();
 
             if (!client.IsReady)
             {

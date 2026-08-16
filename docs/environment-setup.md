@@ -139,6 +139,29 @@ Copy the **Value** column immediately. It is shown once and is unrecoverable aft
 The **Secret ID** column is *not* the secret — it is an identifier, and using it produces
 `AADSTS7000215`.
 
+### Or use a certificate instead
+
+A certificate avoids having a reusable password on disk at all, and is the only option
+where policy forbids secrets. Generate a self-signed one and upload the public half:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.cer \
+        -days 365 -nodes -subj "/CN=dvduck"
+openssl pkcs12 -export -inkey key.pem -in cert.cer -out app.pfx
+```
+
+Upload **`cert.cer`** under **Certificates & secrets** > **Certificates**. Keep
+**`app.pfx`** — it holds the private key, which is what actually authenticates. Uploading
+the `.pfx` or authenticating with the `.cer` are the two ways round to get this wrong.
+
+Then set `DATAVERSE_CERT_PATH` instead of `DATAVERSE_CLIENT_SECRET`. Setting both is
+refused rather than resolved by precedence, so a leftover secret cannot quietly win over a
+certificate you just switched to.
+
+> Certificate authentication is implemented and unit tested, but **has not been verified
+> against a live environment** — this project's tenant authenticates with a secret. The
+> code path is the SDK's documented certificate constructor, but treat it as unproven.
+
 ### API permissions
 
 **None are required.** Microsoft's own S2S walkthrough states plainly that "Delegated
@@ -163,6 +186,9 @@ export DATAVERSE_TENANT_ID="00000000-0000-0000-0000-000000000000"
 export DATAVERSE_CLIENT_ID="00000000-0000-0000-0000-000000000000"
 export DATAVERSE_CLIENT_SECRET="the Value you copied"
 ```
+
+Or, for a certificate, `DATAVERSE_CERT_PATH=/path/to/app.pfx` in place of the secret,
+plus `DATAVERSE_CERT_PASSWORD` if the file is protected.
 
 ### Handling the secret
 
@@ -189,6 +215,33 @@ set -a && . ./.env && set +a
 is valid until its expiry regardless of who has seen it. There is no downside to rotating.
 
 Never paste a secret into source, a commit message, an issue, or a conversation.
+
+### More than one environment
+
+Prefix any variable with a profile name and select it with `--profile`:
+
+```bash
+export DATAVERSE_URL="https://yourorg-dev.crm4.dynamics.com"
+export DATAVERSE_CLIENT_ID="..."          # shared by both
+export DATAVERSE_CLIENT_SECRET="..."      # shared by both
+
+export DATAVERSE_PROD_URL="https://yourorg.crm4.dynamics.com"
+
+dvduck doctor                    # dev, the unprefixed variables
+dvduck doctor --profile prod     # prod URL, everything else inherited
+```
+
+Anything the profile does not set falls back to the unprefixed value, so environments
+behind one app registration need only override the URL. Where they use separate
+registrations, set `DATAVERSE_PROD_CLIENT_ID` and `DATAVERSE_PROD_CLIENT_SECRET` too.
+
+`DATAVERSE_PROFILE` selects a profile when `--profile` is absent. Profile names are
+case-insensitive and hyphens become underscores, so `--profile west-eu` reads
+`DATAVERSE_WEST_EU_URL`.
+
+The fallback has one sharp edge: a typo in the profile name looks like a profile with no
+overrides, and you quietly get the default environment. `doctor` prints the profile it
+used on its first line for exactly that reason.
 
 Check progress:
 
