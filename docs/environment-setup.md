@@ -145,8 +145,31 @@ export DATAVERSE_CLIENT_ID="00000000-0000-0000-0000-000000000000"
 export DATAVERSE_CLIENT_SECRET="the Value you copied"
 ```
 
-Keep these out of source control. `.env` is gitignored; do not paste secrets into code,
-commit messages or issue reports.
+### Handling the secret
+
+The three IDs are not sensitive. The secret is, and it is worth being deliberate about it,
+because the ways it leaks are mundane rather than dramatic: shell history, a screenshot, a
+paste into a chat window or an issue report.
+
+Typing it inline as above puts it in your shell history. Prefer:
+
+```bash
+read -rs DATAVERSE_CLIENT_SECRET && export DATAVERSE_CLIENT_SECRET
+```
+
+`-s` hides the typing and `read` leaves no history entry. Or copy `.env.example` to `.env`
+— gitignored — and source it:
+
+```bash
+cp .env.example .env      # then edit .env
+set -a && . ./.env && set +a
+```
+
+**If a secret is ever exposed, rotate it rather than assessing the risk.** Deleting it in
+**Certificates & secrets** and adding another takes under a minute, and an unrotated secret
+is valid until its expiry regardless of who has seen it. There is no downside to rotating.
+
+Never paste a secret into source, a commit message, an issue, or a conversation.
 
 Check progress:
 
