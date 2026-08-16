@@ -1,126 +1,194 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text.Json;
 using DataverseDuck;
 using DataverseDuck.Configuration;
-using Microsoft.PowerPlatform.Dataverse.Client;
-using Microsoft.Xrm.Sdk.Query;
+using DataverseDuck.Diagnostics;
+using Microsoft.Identity.Client;
 
-// Spike: provoke a real service protection limit and check that
-// DataverseThrottling classifies and explains it.
+// Spike: provoke a real service protection limit, and check that
+// DataverseThrottling recognises what comes back.
 //
-// DataverseThrottling was written from the documentation and unit tested with
-// synthetic faults. That proves the mapping from an error code to a message; it
-// does not prove Dataverse raises what we think it raises, or that the fault
-// survives the SDK wrapping intact.
+// DataverseThrottling was written from documentation and unit tested against
+// synthetic faults. That proves the mapping from an error code to a message. It
+// does not prove Dataverse raises what we think it raises.
 //
-// Deliberately targets the CONCURRENCY limit (-2147015898), which clears in
-// seconds, rather than the request-count limit (6,000 per 5 minutes), which
-// would lock the environment out for the rest of the window for everyone.
+// Targets the EXECUTION TIME limit (1,200 seconds of server time per five
+// minutes) rather than the request count limit (8,000 requests on this
+// environment). Both are enforced per web server and both recover on the same
+// five minute sliding window, but exhausting execution time takes a couple of
+// hundred requests instead of several thousand.
+//
+// Two earlier attempts through the SDK failed to provoke anything, and why
+// they failed is itself a finding. See README.md in this directory.
 
-DotEnvFile.LoadFromCurrentDirectory();
-
-if (!DataverseOptions.TryLoadFromEnvironment(out var options, out var error))
-{
-    Console.Error.WriteLine(error);
+var options = Load();
+if (options is null)
     return 1;
-}
 
-using var client = new ServiceClient(options.ToConnectionString());
-
-if (!client.IsReady)
+// Cookies are what make this work. Dataverse returns an ARRAffinity cookie
+// identifying the web server that answered, and honouring it sends every
+// subsequent request back to that same server. Since the limits are enforced
+// per server, concentrating load is the only way to reach one without
+// exhausting the entire environment's budget.
+using var handler = new HttpClientHandler
 {
-    Console.Error.WriteLine($"Connection failed: {client.LastError}");
-    return 1;
-}
-
-Console.WriteLine($"Connected to {options.EnvironmentUrl}");
-Console.WriteLine("Documented limit: 52 concurrent requests per server, per app, per user.");
-Console.WriteLine("Ramping concurrency until something is refused, or we give up.\n");
-
-// A query that is cheap for the server, so that what we are testing is
-// concurrency rather than execution time.
-static QueryExpression Cheap() => new("account")
-{
-    ColumnSet = new ColumnSet("accountid"),
-    TopCount = 1,
+    CookieContainer = new CookieContainer(),
+    UseCookies = true,
+    MaxConnectionsPerServer = 32,
 };
 
-var kinds = new Dictionary<ThrottleKind, int>();
-var otherFailures = new Dictionary<string, int>();
-Exception? firstThrottle = null;
+using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(2) };
 
-foreach (var concurrency in new[] { 60, 120, 240, 400 })
+http.DefaultRequestHeaders.Authorization =
+    new AuthenticationHeaderValue("Bearer", await AcquireTokenAsync(options));
+
+// Expensive by design: a full page of a wide system table. Measured at about
+// five seconds per call on this environment.
+var heavy = new Uri(options.EnvironmentUrl, "api/data/v9.2/solutioncomponents?$top=5000");
+
+Console.WriteLine($"Environment: {options.EnvironmentUrl}");
+Console.WriteLine("Limit targeted: execution time, 1,200s per web server per 5 minutes.\n");
+
+// Warm up, both to establish the affinity cookie and to read the starting budget.
+using (var warmup = await http.GetAsync(new Uri(options.EnvironmentUrl, "api/data/v9.2/WhoAmI")))
 {
-    var stopwatch = Stopwatch.StartNew();
+    var start = ServiceProtectionBudget.FromHeaders(warmup.Headers);
+    Console.WriteLine($"Pinned to server {Short(start.ServerAffinity)}");
+    Console.WriteLine($"Starting budget: {start}\n");
+}
 
-    var results = await Task.WhenAll(Enumerable.Range(0, concurrency).Select(async _ =>
+const int Concurrency = 16;
+const int MaxRounds = 40;
+
+var stopwatch = Stopwatch.StartNew();
+HttpResponseMessage? throttled = null;
+var sent = 0;
+
+for (var round = 1; round <= MaxRounds && throttled is null; round++)
+{
+    var responses = await Task.WhenAll(Enumerable.Range(0, Concurrency).Select(async _ =>
     {
         try
         {
-            // Clone gives each task its own channel; without it the SDK
-            // serialises calls and no concurrency reaches the server.
-            using var connection = client.Clone();
-            await Task.Run(() => connection.RetrieveMultiple(Cheap()));
-            return (Kind: ThrottleKind.None, Error: (Exception?)null);
+            return await http.GetAsync(heavy);
         }
         catch (Exception e)
         {
-            return (Kind: DataverseThrottling.Classify(e), Error: e);
+            Console.Error.WriteLine($"  request failed: {e.GetType().Name}: {e.Message}");
+            return null;
         }
     }));
 
-    stopwatch.Stop();
+    sent += Concurrency;
 
-    var throttled = 0;
+    ServiceProtectionBudget? latest = null;
 
-    foreach (var (kind, exception) in results)
+    foreach (var response in responses)
     {
-        if (kind != ThrottleKind.None)
+        if (response is null)
+            continue;
+
+        if (response.StatusCode == HttpStatusCode.TooManyRequests && throttled is null)
         {
-            kinds[kind] = kinds.GetValueOrDefault(kind) + 1;
-            firstThrottle ??= exception;
-            throttled++;
+            throttled = response;
+            continue;
         }
-        else if (exception is not null)
-        {
-            var name = exception.GetType().Name;
-            otherFailures[name] = otherFailures.GetValueOrDefault(name) + 1;
-        }
+
+        latest ??= ServiceProtectionBudget.FromHeaders(response.Headers);
+        response.Dispose();
     }
 
-    var ok = results.Count(r => r.Error is null);
-
     Console.WriteLine(
-        $"concurrency {concurrency,4}: {ok,4} ok, {throttled,3} throttled, " +
-        $"{results.Length - ok - throttled,3} other failures, {stopwatch.Elapsed.TotalSeconds:F1}s");
-
-    if (throttled > 0)
-        break;
+        $"round {round,2}: {sent,4} sent, {stopwatch.Elapsed.TotalSeconds,5:F0}s elapsed | " +
+        (latest is null ? "no budget reported" : Describe(latest)));
 }
 
+stopwatch.Stop();
 Console.WriteLine();
 
-if (firstThrottle is null)
+if (throttled is null)
 {
-    Console.WriteLine("Nothing was throttled. The limit is per front-end server and requests");
-    Console.WriteLine("are load balanced, so a short burst from one client may never reach it.");
-
-    if (otherFailures.Count > 0)
-        Console.WriteLine($"Other failures seen: {string.Join(", ", otherFailures.Select(p => $"{p.Key} x{p.Value}"))}");
-
+    Console.WriteLine($"Not throttled after {sent} requests in {stopwatch.Elapsed.TotalSeconds:F0}s.");
     return 0;
 }
 
-Console.WriteLine("Throttled. What DataverseThrottling makes of it:\n");
+Console.WriteLine($"Throttled after {sent} requests in {stopwatch.Elapsed.TotalSeconds:F0}s.\n");
 
-foreach (var (kind, count) in kinds)
-    Console.WriteLine($"  {kind}: {count}");
+var body = await throttled.Content.ReadAsStringAsync();
+var budget = ServiceProtectionBudget.FromHeaders(throttled.Headers);
+
+Console.WriteLine($"  HTTP status:  {(int)throttled.StatusCode} {throttled.StatusCode}");
+Console.WriteLine($"  Server:       {Short(budget.ServerAffinity)}");
+Console.WriteLine($"  Retry-After:  {throttled.Headers.RetryAfter?.ToString() ?? "<not sent>"}");
+Console.WriteLine($"  Budget:       {budget}");
+
+// The Web API reports the code in hex; the SDK reports the same number as a
+// signed integer. Converting one to the other is what lets us check that the
+// code Dataverse actually sends is one DataverseThrottling knows about.
+var hex = TryReadErrorField(body, "code");
+
+Console.WriteLine($"  Error code:   {hex ?? "<none>"}");
+
+if (hex is not null &&
+    hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) &&
+    uint.TryParse(hex[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var unsigned))
+{
+    Console.WriteLine();
+    Console.WriteLine($"  as signed int: {unchecked((int)unsigned)}");
+    Console.WriteLine($"  DataverseThrottling.FromErrorCode => {DataverseThrottling.FromErrorCode(unchecked((int)unsigned))}");
+}
 
 Console.WriteLine();
-Console.WriteLine($"  Classify:   {DataverseThrottling.Classify(firstThrottle)}");
-Console.WriteLine($"  RetryAfter: {DataverseThrottling.RetryAfter(firstThrottle)?.ToString() ?? "<none supplied>"}");
-Console.WriteLine($"  Explain:    {DataverseThrottling.Explain(firstThrottle)}");
-Console.WriteLine();
-Console.WriteLine($"  Raw type:   {firstThrottle.GetType().FullName}");
-Console.WriteLine($"  Raw message: {firstThrottle.Message}");
+Console.WriteLine($"  Message: {TryReadErrorField(body, "message")}");
 
+throttled.Dispose();
 return 0;
+
+static string Describe(ServiceProtectionBudget budget) =>
+    $"{budget.BurstRemaining?.ToString("N0", CultureInfo.InvariantCulture) ?? "?"} requests, " +
+    $"{budget.TimeRemaining?.TotalSeconds.ToString("N0", CultureInfo.InvariantCulture) ?? "?"}s execution left " +
+    $"[{Short(budget.ServerAffinity)}]";
+
+static string Short(string? affinity) =>
+    affinity is null ? "unknown" : affinity[..Math.Min(8, affinity.Length)];
+
+static string? TryReadErrorField(string body, string field)
+{
+    try
+    {
+        return JsonDocument.Parse(body).RootElement
+            .TryGetProperty("error", out var error) && error.TryGetProperty(field, out var value)
+            ? value.GetString()
+            : null;
+    }
+    catch (JsonException)
+    {
+        return null;
+    }
+}
+
+static DataverseOptions? Load()
+{
+    DotEnvFile.LoadFromCurrentDirectory();
+
+    if (DataverseOptions.TryLoadFromEnvironment(out var options, out var error))
+        return options;
+
+    Console.Error.WriteLine(error);
+    return null;
+}
+
+static async Task<string> AcquireTokenAsync(DataverseOptions options)
+{
+    var application = ConfidentialClientApplicationBuilder
+        .Create(options.ClientId)
+        .WithClientSecret(options.ClientSecret)
+        .WithAuthority(options.Authority)
+        .Build();
+
+    var result = await application.AcquireTokenForClient([options.Scope]).ExecuteAsync();
+    return result.AccessToken;
+}

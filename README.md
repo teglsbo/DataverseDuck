@@ -49,9 +49,28 @@ Working end to end against a real Dataverse environment.
 | `DataversePlanParser` (the `WITH` form) | ✅ Built, 28 tests |
 | `DataverseCache` / key-set pushdown | ✅ Built, 28 tests |
 | `.env` loading, `dvduck doctor` remedies | ✅ Built, 17 tests |
-| `DataverseThrottling` (429 explanation) | ✅ Built, not yet provoked on a tenant |
+| `DataverseThrottling` (429 explanation) | ✅ Built, 9 tests; could not be provoked live, see below |
+| `ServiceProtectionBudget` (limit headers) | ✅ Built, 13 tests, verified live |
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
 | Verified against a live environment | ✅ All 8 doctor checks pass; two-hop JSON-to-Dataverse join verified |
+
+### Open
+
+- [ ] **Configurable connections.** `AuthType=ClientSecret` is hardcoded, there is no
+      certificate credential, and targeting a second environment means editing `.env`.
+      Named profiles would fix both.
+- [ ] **A REPL.** The CLI is one-shot today. A REPL holding the DuckDB connection open
+      would let you fetch once and iterate locally, with completion sourced from the
+      metadata snapshot offline and from `information_schema` for cached tables.
+      PrettyPrompt 6.0.5 is the candidate readline library.
+- [ ] **`dvduck query --snapshot`.** `capture` can write a metadata snapshot but `query`
+      cannot read one back, so offline development needs code rather than the CLI
+      (ADR 0003).
+- [ ] **Package metadata.** No `RepositoryUrl`, and the version is pinned at 0.1.0.
+- [ ] **Unexplained: `COUNT(*)` returned 56,161** despite a documented 50,000 aggregate
+      limit. Either the limit does not apply to `count`, or it is not enforced here.
+- [ ] **Unexplained: a trailing newline flips `read_json_auto` type inference**
+      (ADR 0002, measurement 9).
 
 ## Installing
 
@@ -289,6 +308,33 @@ folds it into a single condition, and 56,000 keys in one query still ran.
 
 See [docs/large-tables.md](docs/large-tables.md) for the numbers and the official limits.
 
+## Service protection limits
+
+Dataverse limits requests, execution time and concurrency per user, per **web server**,
+over a five minute window. `dvduck doctor` reads the environment's own counters and prints
+them:
+
+```
+[INFO] Service protection budget
+       Recommended parallelism: 4
+       Requests remaining:      7,997
+       Execution time left:     1,200s
+```
+
+Design against the recommended parallelism, not the limits. Ours reports **4**, against a
+documented concurrency limit of 52. The two counters describe a single web server, so they
+are only comparable between readings that hit the same one — `ServiceProtectionBudget`
+reports which server answered so you can tell.
+
+`DataverseThrottling` turns a 429 into the limit that was hit, the wait Dataverse asked
+for, and what to change. It has **never been tested against a real fault**, because three
+attempts to provoke one all failed: the SDK gives you concurrency or server affinity but
+never both, and a client that has both still burns execution time more slowly than the
+window replenishes it. From an ordinary single .NET client these limits are hard to reach
+at all — which is good news, but it is not a green checkmark, and it is recorded as such.
+
+See [docs/service-protection.md](docs/service-protection.md).
+
 ## The folding guard
 
 SQL 4 CDS pushes joins and filters into Dataverse as FetchXML where it can, and **silently
@@ -377,6 +423,7 @@ They are kept because the ADRs cite them as evidence. They are not part of the b
 | `SeedData` | Give a live environment known rows to join against | 2 accounts, 4 contacts, fixed GUIDs |
 | `MetadataSpike` | Can SQL 4 CDS run without a live connection? | Yes, but metadata must be captured, not synthesised |
 | `TimezoneSpike` | How do timestamps behave across the seam? | Six rules, now enforced in code |
+| `ThrottleSpike` | Can we provoke a real 429? | No, three ways — and why is the finding |
 
 ## Licensing and telemetry notes
 
