@@ -16,6 +16,7 @@ Measured facts that are not themselves decisions live in
 | [0004](0004-execution-plan-folding-guard.md) | Analyse the execution plan and refuse queries that do not fold | Accepted |
 | [0005](0005-detect-textual-json-timestamps.md) | Detect timestamp columns that JSON inference left as text | Accepted |
 | [0006](0006-key-set-pushdown.md) | Let DuckDB choose the rows, but do the fetching ourselves | Accepted |
+| [0007](0007-not-extending-duckdb-for-pushdown.md) | Do not extend DuckDB to push down our predicates — yet | Accepted |
 
 ## Why there is no CHANGELOG
 
