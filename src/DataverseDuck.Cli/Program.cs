@@ -41,6 +41,7 @@ internal static class Program
             "doctor" => await DoctorAsync(args.Skip(1).ToArray()),
             "capture" => Capture(args.Skip(1).ToArray()),
             "query" => Query(args.Skip(1).ToArray()),
+            "repl" => await ReplAsync(args.Skip(1).ToArray()),
             "tables" => Tables(args.Skip(1).ToArray()),
             null or "help" or "--help" or "-h" => Help(),
             _ => Unknown(command),
@@ -59,6 +60,7 @@ internal static class Program
               dvduck doctor [table ...]     Verify the environment is set up for app-registration access.
               dvduck capture <table ...>    Save entity metadata to a snapshot for offline work.
               dvduck query [options]        Cache Dataverse tables, then query them alongside JSON.
+              dvduck repl [options]         Fetch once, then query it interactively as often as you like.
               dvduck tables --db <path>     Show what a cache file holds and how old it is.
 
             Configuration (environment variables):
@@ -129,6 +131,20 @@ internal static class Program
 
             Ordinary CTEs may appear in the same WITH; they are left to DuckDB
             and run with the final query, so a {{ }} cannot read them.
+
+            Options for 'repl':
+              --db <path>              DuckDB file. Default: in-memory, so the cache is
+                                       gone when you leave. Pass a file to keep it and
+                                       start the next session without a round trip.
+              --snapshot <path>        Metadata snapshot used for completion. Default:
+                                       metadata/snapshot.bin
+              --strict                 As for 'query'.
+
+            In the REPL a WITH ... AS DATAVERSE block may end without a query: it
+            fetches the tables and leaves them there for you to query afterwards.
+            Anything else is plain DuckDB SQL over what is already cached, so a
+            table is fetched once and asked many questions. Dataverse is not
+            contacted until the first DATAVERSE block. '.help' lists the rest.
 
             See docs/environment-setup.md for how to obtain these.
             """);
@@ -240,6 +256,95 @@ internal static class Program
     /// variables, or whatever DATAVERSE_PROFILE says.
     /// </summary>
     private static string? Profile;
+
+    private static async Task<int> ReplAsync(string[] args)
+    {
+        var database = ":memory:";
+        var policy = FoldingPolicy.Warn;
+        string? snapshotPath = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--db":
+                    if (++i >= args.Length)
+                    {
+                        Console.Error.WriteLine("--db needs a path.");
+                        return 2;
+                    }
+
+                    database = args[i];
+                    break;
+
+                case "--snapshot":
+                    if (++i >= args.Length)
+                    {
+                        Console.Error.WriteLine("--snapshot needs a path.");
+                        return 2;
+                    }
+
+                    snapshotPath = args[i];
+                    break;
+
+                case "--strict":
+                    policy = FoldingPolicy.RejectCritical;
+                    break;
+
+                default:
+                    Console.Error.WriteLine($"Unknown option '{args[i]}'. Run 'dvduck help'.");
+                    return 2;
+            }
+        }
+
+        MetadataSnapshot? snapshot = null;
+
+        // Only for completion. A missing or unreadable snapshot costs you
+        // suggestions, never the session, so it is never fatal here.
+        if (snapshotPath is not null || File.Exists(CaptureArguments.DefaultPath))
+        {
+            var path = snapshotPath ?? CaptureArguments.DefaultPath;
+
+            try
+            {
+                snapshot = MetadataSnapshot.Load(path);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine($"Could not read the snapshot {path}: {e.Message}");
+                Console.Error.WriteLine("Continuing without Dataverse name completion.");
+            }
+        }
+
+        var duck = UtcTimestampPolicy.OpenConnection($"Data Source={database}");
+
+        using var session = new ReplSession(
+            duck,
+            () => TryLoadOptions(out var options) ? options : null,
+            policy,
+            snapshot);
+
+        using var cancellation = new CancellationTokenSource();
+
+        // Ctrl-C abandons the running statement, not the session. A long fetch
+        // you did not mean to start should not cost you everything cached.
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            Console.Error.WriteLine("Cancelling the current statement.");
+            cancellation.Cancel();
+        };
+
+        if (!Console.IsInputRedirected)
+        {
+            Console.WriteLine($"dvduck REPL. {database} database. '.help' for commands, '.quit' to leave.");
+
+            if (snapshot is not null)
+                Console.WriteLine($"Completing {snapshot.LogicalNames.Count} Dataverse tables from the snapshot.");
+        }
+
+        return await new ReplLoop(session).RunAsync(cancellation.Token);
+    }
 
     /// <summary>
     /// Removes '--profile name' from anywhere in the argument list, so that it

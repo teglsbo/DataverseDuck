@@ -50,7 +50,15 @@ public sealed record DataversePlan(IReadOnlyList<PlanStep> Steps, string FinalSq
 /// </remarks>
 public static class DataversePlanParser
 {
-    public static DataversePlan Parse(string sql)
+    public static DataversePlan Parse(string sql) => Parse(sql, requireFinalQuery: true);
+
+    /// <summary>
+    /// Reads a plan. <paramref name="requireFinalQuery"/> is false only for the
+    /// REPL, where a WITH block on its own means 'fetch this and let me look at
+    /// it', and the query comes as the next statement. For the one-shot command
+    /// a plan with no query does nothing observable, so it stays an error there.
+    /// </summary>
+    public static DataversePlan Parse(string sql, bool requireFinalQuery)
     {
         ArgumentNullException.ThrowIfNull(sql);
 
@@ -156,7 +164,20 @@ public static class DataversePlanParser
         var tail = sql[position..].Trim();
         if (tail.Length == 0)
         {
-            throw new FormatException("The WITH block is not followed by a query.");
+            if (requireFinalQuery)
+                throw new FormatException("The WITH block is not followed by a query.");
+
+            // Plain CTEs cannot outlive the statement that declared them, so
+            // there is nowhere to put them. Saying so beats caching the
+            // Dataverse entries and quietly dropping the rest.
+            if (plainCtes.Count > 0)
+            {
+                throw new FormatException(
+                    "A WITH block with no query can only bring in JSON and DATAVERSE entries. " +
+                    "An ordinary CTE would have nothing to be part of.");
+            }
+
+            return new DataversePlan(steps, string.Empty);
         }
 
         var finalSql = plainCtes.Count > 0

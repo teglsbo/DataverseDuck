@@ -35,4 +35,8 @@
     <InternalsVisibleTo Include="DataverseDuck.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="PrettyPrompt" Version="6.0.5" />
+  </ItemGroup>
+
 </Project>
