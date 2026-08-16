@@ -105,7 +105,8 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
         if (e.Message.Contains("AADSTS90002"))
             return $"The tenant '{_options.TenantId ?? "(organizations)"}' does not exist. Copy the directory " +
                    $"(tenant) ID from the app registration Overview page in Entra ID, and set " +
-                   $"{DataverseOptions.TenantIdVariable}. Note that is a different GUID from the application ID.";
+                   $"{DataverseOptions.TenantIdVariable}. It is a different GUID from the application ID, " +
+                   $"and from the environment and organization IDs shown in the Power Platform admin centre.";
 
         if (e.Message.Contains("AADSTS700016"))
             return $"The tenant exists, but application '{_options.ClientId}' was not found in it. Check " +

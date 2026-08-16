@@ -275,7 +275,7 @@ potentially sensitive if the environment is a customer's.
 | Symptom | Cause |
 |---|---|
 | `AADSTS7000215` invalid client secret | Copied the Secret ID rather than the Value, or the secret expired. |
-| `AADSTS90002` tenant not found | `DATAVERSE_TENANT_ID` wrong — likely the application ID pasted twice. |
+| `AADSTS90002` tenant not found | `DATAVERSE_TENANT_ID` wrong — likely the application ID pasted twice, or the environment/organization ID from the Power Platform admin centre. It must be the Entra **Directory (tenant) ID**. |
 | `AADSTS700016` application not found | Registration is in a different tenant. |
 | Token fine, WhoAmI 401 | **No application user.** Step 4. |
 | Connects, but privilege errors | Application user has no security role. Step 4, part 3. |

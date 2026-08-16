@@ -45,7 +45,9 @@ internal static class Program
               DATAVERSE_URL            https://yourorg.crm4.dynamics.com
               DATAVERSE_CLIENT_ID      Application (client) ID of the app registration
               DATAVERSE_CLIENT_SECRET  Client secret *value*
-              DATAVERSE_TENANT_ID      Directory (tenant) ID (optional but recommended)
+              DATAVERSE_TENANT_ID      Directory (tenant) ID from Entra ID -- not the environment
+                                       or organization ID shown in the admin centre.
+                                       Optional but recommended.
 
             Options:
               --out <path>             Snapshot path for 'capture'. Default: metadata/snapshot.bin
