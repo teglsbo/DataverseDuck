@@ -1,0 +1,18 @@
+<Project>
+
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>dataverse-duck contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>dataverse;dynamics365;duckdb;sql;powerplatform</PackageTags>
+    <RepositoryType>git</RepositoryType>
+
+    <!--
+      Nothing is packable unless it says so. Keeps the test project and the
+      spikes out of 'dotnet pack' at the solution level.
+    -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

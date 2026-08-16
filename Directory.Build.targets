@@ -1,0 +1,11 @@
+<Project>
+
+  <!--
+    Imported after the project file, so IsPackable has its final value here.
+    Directory.Build.props is evaluated too early to test it.
+  -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

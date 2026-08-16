@@ -4,7 +4,25 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <IsPackable>true</IsPackable>
+    <PackageId>DataverseDuck</PackageId>
+    <Description>
+      Query Microsoft Dataverse tables and local JSON logs in a single SQL statement.
+      Filters are pushed into Dataverse as FetchXML by SQL 4 CDS, and only the matching
+      rows are streamed into DuckDB to join against JSON locally.
+    </Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Shipped inside the package so a consumer's build fails loudly rather than
+      their process dying at runtime. See the targets file for why.
+    -->
+    <None Include="build/DataverseDuck.targets"
+          Pack="true"
+          PackagePath="buildTransitive/DataverseDuck.targets" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- The plan analyzer couples to internal engine type names; tests pin them. -->

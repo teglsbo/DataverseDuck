@@ -8,6 +8,15 @@
     <AssemblyName>dvduck</AssemblyName>
     <RootNamespace>DataverseDuck.Cli</RootNamespace>
 
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>dvduck</ToolCommandName>
+    <PackageId>DataverseDuck.Cli</PackageId>
+    <Description>
+      Command line tool for querying Microsoft Dataverse alongside local JSON files.
+      Install with: dotnet tool install --global DataverseDuck.Cli
+    </Description>
+
     <!--
       Not invariant. SQL 4 CDS builds SQL Server collations in a static
       constructor, which needs real culture data; under InvariantGlobalization

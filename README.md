@@ -52,6 +52,29 @@ Working end to end against a real Dataverse environment.
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
 | Verified against a live environment | ✅ All 8 doctor checks pass; two-hop JSON-to-Dataverse join verified |
 
+## Installing
+
+The command line tool:
+
+```bash
+dotnet tool install --global DataverseDuck.Cli
+dvduck help
+```
+
+The library, for use from your own code:
+
+```bash
+dotnet add package DataverseDuck
+```
+
+Both are MIT. `dotnet pack -c Release -o out` builds them from source; the test project
+and the spikes are excluded.
+
+The library package carries a build target that **fails your build** if
+`InvariantGlobalization` is `true`, with error `DVD001`. That property makes SQL 4 CDS
+throw a `TypeInitializationException` naming nothing relevant, and it cost a live
+debugging session to trace, so consumers are told at build time instead of at runtime.
+
 ## Quickstart
 
 Requires .NET 10.
@@ -196,7 +219,7 @@ using var duck = UtcTimestampPolicy.OpenConnection("Data Source=cache.duckdb");
 **Do not set `InvariantGlobalization` to `true`** in a project that uses this library.
 SQL 4 CDS builds SQL Server collations in a static constructor that needs real culture
 data; without it the engine fails to initialise with a `TypeInitializationException`
-naming none of this. Found on the first run against a real tenant.
+naming none of this. The package enforces this at build time (`DVD001`).
 
 Then join the two worlds:
 
@@ -266,6 +289,7 @@ spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/sql4cds-behaviour.md   Measured engine defaults and type mapping
 docs/adr/                   Architecture decision records
+Directory.Build.props       Shared package metadata; nothing packs unless it opts in
 ```
 
 ## Spikes

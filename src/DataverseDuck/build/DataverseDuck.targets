@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    SQL 4 CDS builds SQL Server collations in a static constructor, which needs
+    real culture data. Under InvariantGlobalization the engine fails to
+    initialise with a TypeInitializationException on SqlTypeConverter, which
+    names nothing that would lead you here.
+
+    That cost a live debugging session to find, so consumers get it at build
+    time instead. Setting the property is a deliberate act, so this is an error
+    rather than a warning: a warning in a large build is a warning nobody sees.
+  -->
+  <Target Name="DataverseDuckCheckGlobalization"
+          BeforeTargets="Build"
+          Condition="'$(InvariantGlobalization)' == 'true'">
+    <Error Code="DVD001"
+           Text="DataverseDuck cannot run with InvariantGlobalization=true. SQL 4 CDS builds SQL Server collations at type-initialisation time and needs ICU culture data; without it every query fails with a TypeInitializationException that never mentions globalization." />
+  </Target>
+
+</Project>
