@@ -54,7 +54,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 Requires .NET 10.
 
 ```bash
-dotnet test          # 118 tests, no tenant required
+dotnet test          # 197 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -72,6 +72,53 @@ dotnet run --project src/DataverseDuck.Cli -- doctor account contact
 `doctor` exists because Dataverse setup failures are opaque — a missing application user
 and a missing security role both surface as a bare authentication error, but the fixes are
 in different places. It checks each link in the chain and tells you which one broke.
+
+### Ask a question
+
+A query names its own sources in one `WITH` block. How many contacts had webchat messages:
+
+```bash
+dvduck query --plan "
+  WITH logs AS JSON ('webchat/*.json'),
+       crm_contact AS DATAVERSE (
+           SELECT contactid, fullname FROM contact
+           WHERE contactid IN {{SELECT CAST(customer_id AS UUID)
+                                FROM logs WHERE channel = 'webchat'}}
+       )
+  SELECT count(DISTINCT c.contactid)
+  FROM logs l JOIN crm_contact c ON c.contactid = CAST(l.customer_id AS UUID)
+  WHERE l.channel = 'webchat'"
+```
+
+Entries run top to bottom, before the final query. `JSON` registers a file or glob as a
+view; `DATAVERSE` is **one round trip** that materialises a real table.
+
+The `{{ }}` is the important part. It is an ordinary DuckDB query, evaluated locally
+first, whose results are inlined as literals so Dataverse does the filtering. Without it
+you would transfer the whole `contact` table to find the handful of rows your logs mention.
+
+Because each entry can read everything above it, and a cached Dataverse table is just a
+DuckDB table by then, narrowing **chains**:
+
+```sql
+WITH logs        AS JSON ('webchat/*.json'),
+     crm_account AS DATAVERSE (SELECT accountid, name FROM account
+                               WHERE accountid IN {{SELECT DISTINCT CAST(account_id AS UUID)
+                                                    FROM logs}}),
+     crm_contact AS DATAVERSE (SELECT contactid, fullname, parentcustomerid FROM contact
+                               WHERE parentcustomerid IN {{SELECT accountid FROM crm_account}})
+SELECT a.name, count(DISTINCT c.contactid)
+FROM crm_account a JOIN crm_contact c ON c.parentcustomerid = a.accountid
+GROUP BY a.name;
+```
+
+In the test that covers this, that fetches 2 of 5,000 accounts and then 4 of 10,000
+contacts. Ordinary CTEs may sit in the same `WITH`; they are left to DuckDB and run with
+the final query, so a `{{ }}` cannot read them — the parser says so rather than letting it
+fail as "table not found".
+
+Use `--plan-file plan.sql` to keep the SQL in a file. `--db cache.duckdb` persists the
+fetched tables so a re-run costs nothing.
 
 ### Use the library
 

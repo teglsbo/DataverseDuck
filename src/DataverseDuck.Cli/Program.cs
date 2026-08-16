@@ -42,45 +42,45 @@ internal static class Program
               --out <path>             Snapshot path for 'capture'. Default: metadata/snapshot.bin
 
             Options for 'query':
-              --cache <table>=<sql>    Run SQL against Dataverse into a DuckDB table. Repeatable.
-                                       The SQL may embed one DuckDB query in {{ }} to fetch only
-                                       the rows your local data refers to, instead of the table.
-              --json <view>=<path>     Expose a JSON file or glob as a view. Repeatable.
-              --run <sql>              The query to print results for.
-              --plan <sql>             A WITH block that names its Dataverse fetches and the
-                                       query in one statement. Replaces --cache and --run.
+              --plan <sql>             A WITH block naming its own sources and the query, in
+                                       one statement. This is the main form.
+              --plan-file <path>       Read that plan from a file instead.
               --db <path>              DuckDB file. Default: in-memory.
               --strict                 Fail if any operation would run locally rather than
                                        inside Dataverse. Default: warn but continue.
 
+            Older flag form, equivalent but with the order left implicit:
+              --json <view>=<path>     Expose a JSON file or glob as a view. Repeatable.
+              --cache <table>=<sql>    Run SQL against Dataverse into a DuckDB table. Repeatable.
+              --run <sql>              The query to print results for.
+
             Example -- how many contacts had webchat messages:
-              dvduck query \
-                --json logs='webchat/*.json' \
-                --cache crm_contact="SELECT contactid, fullname FROM contact
-                                     WHERE contactid IN {{SELECT CAST(customer_id AS UUID)
-                                                          FROM logs WHERE channel = 'webchat'}}" \
-                --run "SELECT count(DISTINCT c.contactid)
-                       FROM logs l JOIN crm_contact c ON c.contactid = CAST(l.customer_id AS UUID)
-                       WHERE l.channel = 'webchat'"
+              dvduck query --plan "
+                WITH logs AS JSON ('webchat/*.json'),
+                     crm_contact AS DATAVERSE (
+                         SELECT contactid, fullname FROM contact
+                         WHERE contactid IN {{SELECT CAST(customer_id AS UUID)
+                                              FROM logs WHERE channel = 'webchat'}}
+                     )
+                SELECT count(DISTINCT c.contactid)
+                FROM logs l JOIN crm_contact c ON c.contactid = CAST(l.customer_id AS UUID)
+                WHERE l.channel = 'webchat'"
 
-              Only the contacts the logs mention are fetched; the rest of the
-              table is never transferred. --json is evaluated before --cache."
+              Only the contacts the logs mention are fetched; the other rows of
+              the table are never transferred.
 
-            The same thing with --plan, which keeps the order in one statement:
-              dvduck query \
-                --json logs='webchat/*.json' \
-                --plan "WITH crm_contact AS DATAVERSE (
-                            SELECT contactid, fullname FROM contact
-                            WHERE contactid IN {{SELECT CAST(customer_id AS UUID)
-                                                 FROM logs WHERE channel = 'webchat'}}
-                        )
-                        SELECT count(DISTINCT c.contactid)
-                        FROM logs l JOIN crm_contact c ON c.contactid = CAST(l.customer_id AS UUID)
-                        WHERE l.channel = 'webchat'"
+            Entries run top to bottom, before the final query. A DATAVERSE entry
+            is one round trip that materialises a real table, so its {{ }} can
+            read any entry above it -- including another DATAVERSE table, which
+            is how you narrow across two hops:
 
-              Each DATAVERSE entry is a round trip that materialises a real
-              table, top to bottom, so a later {{ }} can read an earlier one.
-              Ordinary CTEs in the same WITH are left to DuckDB.
+                WITH logs        AS JSON ('webchat/*.json'),
+                     crm_account AS DATAVERSE (... {{SELECT ... FROM logs}}),
+                     crm_contact AS DATAVERSE (... {{SELECT accountid FROM crm_account}})
+                SELECT ...
+
+            Ordinary CTEs may appear in the same WITH; they are left to DuckDB
+            and run with the final query, so a {{ }} cannot read them.
 
             See docs/environment-setup.md for how to obtain these.
             """);
@@ -206,6 +206,7 @@ internal static class Program
     {
         List<(string Table, string Sql)> caches = [];
         List<(string View, string Path)> jsons = [];
+        List<PlanStep> steps = [];
         string? finalSql = null;
         string? plan = null;
         var database = ":memory:";
@@ -213,7 +214,7 @@ internal static class Program
 
         for (var i = 0; i < args.Length; i++)
         {
-            var needsValue = args[i] is "--cache" or "--json" or "--run" or "--db" or "--plan";
+            var needsValue = args[i] is "--cache" or "--json" or "--run" or "--db" or "--plan" or "--plan-file";
 
             if (needsValue && i + 1 >= args.Length)
             {
@@ -243,6 +244,17 @@ internal static class Program
                     plan = args[++i];
                     break;
 
+                case "--plan-file":
+                    var planPath = args[++i];
+                    if (!File.Exists(planPath))
+                    {
+                        Console.Error.WriteLine($"No plan file at '{planPath}'.");
+                        return 2;
+                    }
+
+                    plan = File.ReadAllText(planPath);
+                    break;
+
                 case "--db":
                     database = args[++i];
                     break;
@@ -259,16 +271,16 @@ internal static class Program
 
         if (plan is not null)
         {
-            if (caches.Count > 0 || finalSql is not null)
+            if (caches.Count > 0 || jsons.Count > 0 || finalSql is not null)
             {
-                Console.Error.WriteLine("--plan already says what to fetch and what to run; drop --cache and --run.");
+                Console.Error.WriteLine("--plan already names its own sources; drop --json, --cache and --run.");
                 return 2;
             }
 
             try
             {
                 var parsed = DataversePlanParser.Parse(plan);
-                caches.AddRange(parsed.Steps.Select(step => (step.Table, step.Sql)));
+                steps.AddRange(parsed.Steps);
                 finalSql = parsed.FinalSql;
             }
             catch (FormatException e)
@@ -276,6 +288,13 @@ internal static class Program
                 Console.Error.WriteLine($"Could not read the plan: {e.Message}");
                 return 2;
             }
+        }
+        else
+        {
+            // The flag form has a fixed order: JSON views first, so that a
+            // --cache statement's {{ }} can read them.
+            steps.AddRange(jsons.Select(j => new PlanStep(PlanStepKind.Json, j.View, j.Path)));
+            steps.AddRange(caches.Select(c => new PlanStep(PlanStepKind.Dataverse, c.Table, c.Sql)));
         }
 
         if (finalSql is null)
@@ -291,7 +310,7 @@ internal static class Program
 
         try
         {
-            if (caches.Count > 0)
+            if (steps.Any(step => step.Kind == PlanStepKind.Dataverse))
             {
                 if (!TryLoadOptions(out var options))
                     return 2;
@@ -332,14 +351,18 @@ internal static class Program
             };
 
             // JSON first: a --cache statement may embed a {{ }} query over these
-            // views to fetch only the Dataverse rows the local data refers to.
-            foreach (var (name, location) in jsons)
-                cache.RegisterJson(name, location);
-
-            foreach (var (name, statement) in caches)
+            // Everything the plan brings in, in written order: a DATAVERSE entry's
+            // {{ }} can read any JSON view or table established above it.
+            foreach (var step in steps)
             {
-                Console.Error.WriteLine($"Caching {name}...");
-                Console.Error.WriteLine($"  {cache.Cache(statement, name, cancellation.Token)}");
+                if (step.Kind == PlanStepKind.Json)
+                {
+                    cache.RegisterJson(step.Name, step.Body);
+                    continue;
+                }
+
+                Console.Error.WriteLine($"Caching {step.Name}...");
+                Console.Error.WriteLine($"  {cache.Cache(step.Body, step.Name, cancellation.Token)}");
             }
 
             using var reader = cache.Query(finalSql);

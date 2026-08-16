@@ -19,9 +19,9 @@ public class DataversePlanParserTests
             SELECT count(*) FROM crm_contact
             """);
 
-        Assert.Equal(["crm_account", "crm_contact"], plan.Steps.Select(s => s.Table));
-        Assert.StartsWith("SELECT accountid", plan.Steps[0].Sql);
-        Assert.Contains("{{SELECT accountid FROM crm_account}}", plan.Steps[1].Sql);
+        Assert.Equal(["crm_account", "crm_contact"], plan.Steps.Select(s => s.Name));
+        Assert.StartsWith("SELECT accountid", plan.Steps[0].Body);
+        Assert.Contains("{{SELECT accountid FROM crm_account}}", plan.Steps[1].Body);
         Assert.Equal("SELECT count(*) FROM crm_contact", plan.FinalSql);
     }
 
@@ -35,7 +35,7 @@ public class DataversePlanParserTests
             """);
 
         Assert.Single(plan.Steps);
-        Assert.Equal("crm_contact", plan.Steps[0].Table);
+        Assert.Equal("crm_contact", plan.Steps[0].Name);
         Assert.StartsWith("WITH busy AS (SELECT customer_id FROM logs", plan.FinalSql);
         Assert.EndsWith("SELECT * FROM busy JOIN crm_contact USING (contactid)", plan.FinalSql);
     }
@@ -63,7 +63,7 @@ public class DataversePlanParserTests
             """);
 
         Assert.Single(plan.Steps);
-        Assert.Contains("'Bob (Robert'", plan.Steps[0].Sql);
+        Assert.Contains("'Bob (Robert'", plan.Steps[0].Body);
         Assert.Equal("SELECT * FROM crm_contact", plan.FinalSql);
     }
 
@@ -77,7 +77,7 @@ public class DataversePlanParserTests
             SELECT 1
             """);
 
-        Assert.Contains("'O''Brien (x)'", plan.Steps[0].Sql);
+        Assert.Contains("'O''Brien (x)'", plan.Steps[0].Body);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class DataversePlanParserTests
             SELECT 1
             """);
 
-        Assert.Contains("IN (0, (1))", plan.Steps[0].Sql);
+        Assert.Contains("IN (0, (1))", plan.Steps[0].Body);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class DataversePlanParserTests
             SELECT 1
             """));
 
-        Assert.Contains("fetched later", error.Message);
+        Assert.Contains("comes later", error.Message);
         Assert.Contains("crm_account", error.Message);
     }
 
@@ -175,7 +175,7 @@ public class DataversePlanParserTests
         var error = Assert.Throws<FormatException>(() =>
             DataversePlanParser.Parse("WITH a AS (SELECT 1) SELECT * FROM a"));
 
-        Assert.Contains("nothing to fetch", error.Message);
+        Assert.Contains("nothing to bring in", error.Message);
     }
 
     [Fact]
@@ -203,6 +203,85 @@ public class DataversePlanParserTests
             DataversePlanParser.Parse("WITH a AS DATAVERSE (SELECT 1 SELECT 2"));
     }
 
+
+    [Fact]
+    public void ReadsJsonEntries()
+    {
+        var plan = DataversePlanParser.Parse("""
+            WITH logs AS JSON ('webchat/*.json'),
+                 crm_contact AS DATAVERSE (
+                     SELECT contactid FROM contact
+                     WHERE contactid IN {{SELECT customer_id FROM logs}}
+                 )
+            SELECT 1
+            """);
+
+        Assert.Equal(2, plan.Steps.Count);
+        Assert.Equal(PlanStepKind.Json, plan.Steps[0].Kind);
+        Assert.Equal("logs", plan.Steps[0].Name);
+        Assert.Equal("webchat/*.json", plan.Steps[0].Body);
+        Assert.Equal(PlanStepKind.Dataverse, plan.Steps[1].Kind);
+    }
+
+    [Fact]
+    public void JsonOnlyPlansAreAllowed()
+    {
+        var plan = DataversePlanParser.Parse("WITH logs AS JSON ('a.json') SELECT * FROM logs");
+
+        Assert.Single(plan.Steps);
+        Assert.Equal("SELECT * FROM logs", plan.FinalSql);
+    }
+
+    [Fact]
+    public void JsonPathKeepsDoubledQuoteAsEscape()
+    {
+        var plan = DataversePlanParser.Parse("WITH j AS JSON ('it''s/*.json') SELECT 1");
+
+        Assert.Equal("it's/*.json", plan.Steps[0].Body);
+    }
+
+    [Fact]
+    public void RefusesJsonEntryThatIsNotOneQuotedPath()
+    {
+        var error = Assert.Throws<FormatException>(() =>
+            DataversePlanParser.Parse("WITH j AS JSON (SELECT 1) SELECT 1"));
+
+        Assert.Contains("one quoted path or glob", error.Message);
+    }
+
+    [Fact]
+    public void RefusesJsonEntryWithTwoLiterals()
+    {
+        var error = Assert.Throws<FormatException>(() =>
+            DataversePlanParser.Parse("WITH j AS JSON ('a.json', 'b.json') SELECT 1"));
+
+        Assert.Contains("exactly one quoted path", error.Message);
+    }
+
+    [Fact]
+    public void RefusesAnEntryDefinedTwice()
+    {
+        var error = Assert.Throws<FormatException>(() =>
+            DataversePlanParser.Parse("WITH j AS JSON ('a.json'), j AS JSON ('b.json') SELECT 1"));
+
+        Assert.Contains("defined twice", error.Message);
+    }
+
+    [Fact]
+    public void RefusesReadingAJsonEntryDeclaredLater()
+    {
+        var error = Assert.Throws<FormatException>(() => DataversePlanParser.Parse("""
+            WITH crm_contact AS DATAVERSE (
+                SELECT contactid FROM contact WHERE contactid IN {{SELECT customer_id FROM logs}}
+            ),
+            logs AS JSON ('webchat/*.json')
+            SELECT 1
+            """));
+
+        Assert.Contains("comes later", error.Message);
+        Assert.Contains("logs", error.Message);
+    }
+
     [Fact]
     public void AcceptsQuotedNames()
     {
@@ -211,7 +290,7 @@ public class DataversePlanParserTests
             SELECT 1
             """);
 
-        Assert.Equal("crm contact", plan.Steps[0].Table);
+        Assert.Equal("crm contact", plan.Steps[0].Name);
     }
 }
 
@@ -271,7 +350,7 @@ public class PlanEndToEndTests : IDisposable
             GROUP BY a.name ORDER BY a.name
             """);
 
-        var counts = plan.Steps.Select(step => cache.Cache(step.Sql, step.Table).RowCount).ToList();
+        var counts = plan.Steps.Select(step => cache.Cache(step.Body, step.Name).RowCount).ToList();
 
         Assert.Equal([2, 4], counts);
 
