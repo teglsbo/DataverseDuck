@@ -1,0 +1,38 @@
+using DuckDB.NET.Data;
+using var conn = new DuckDBConnection("Data Source=:memory:"); conn.Open();
+File.WriteAllText("evt.json", "{\"id\":1,\"event_at\":\"2026-08-16T12:00:00+02:00\"}\n");
+File.WriteAllText("naive.json", "{\"id\":1,\"event_at\":\"2026-08-16T12:00:00\"}\n");
+
+Q(conn, "inferred type, offset-bearing", "SELECT typeof(event_at) t, event_at::VARCHAR v FROM read_json_auto('evt.json')");
+Q(conn, "inferred type, naive",         "SELECT typeof(event_at) t, event_at::VARCHAR v FROM read_json_auto('naive.json')");
+
+foreach (var tz in new[]{"UTC","Europe/Berlin","America/New_York"})
+{
+    E(conn, $"SET TimeZone='{tz}'");
+    Q(conn, $"[{tz}] AT TIME ZONE direction", """
+        SELECT typeof(TIMESTAMP '2026-08-16 10:00:00' AT TIME ZONE 'UTC') AS naive_at_tz_type,
+               (TIMESTAMP '2026-08-16 10:00:00' AT TIME ZONE 'UTC')::VARCHAR AS naive_at_tz,
+               typeof(TIMESTAMPTZ '2026-08-16T12:00:00+02:00' AT TIME ZONE 'UTC') AS tz_at_tz_type,
+               (TIMESTAMPTZ '2026-08-16T12:00:00+02:00' AT TIME ZONE 'UTC')::VARCHAR AS tz_at_tz
+        """);
+    Q(conn, $"[{tz}] naive vs tz comparison", """
+        SELECT (TIMESTAMP '2026-08-16 10:00:00' = TIMESTAMPTZ '2026-08-16T12:00:00+02:00') AS eq
+        """);
+    Q(conn, $"[{tz}] json join, inferred types", """
+        SELECT typeof(j.event_at) AS json_type,
+               (TIMESTAMP '2026-08-16 10:00:00' = j.event_at) AS eq
+        FROM read_json_auto('evt.json') j
+        """);
+}
+
+static void Q(DuckDBConnection c, string label, string sql)
+{
+    Console.WriteLine($"\n-- {label}");
+    using var cmd = c.CreateCommand(); cmd.CommandText = sql;
+    using var r = cmd.ExecuteReader();
+    var cols = Enumerable.Range(0, r.FieldCount).Select(r.GetName).ToArray();
+    while (r.Read())
+        for (int i = 0; i < r.FieldCount; i++)
+            Console.WriteLine($"   {cols[i],-20} = {(r.IsDBNull(i) ? "<NULL>" : r.GetValue(i))}");
+}
+static void E(DuckDBConnection c, string sql){ using var cmd=c.CreateCommand(); cmd.CommandText=sql; cmd.ExecuteNonQuery(); }
