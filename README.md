@@ -46,7 +46,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 | `DuckDbBulkLoader` (reader → Appender) | ✅ Built, 10 tests |
 | `ExecutionPlanAnalyzer` (folding guard) | ✅ Built, 27 tests |
 | 429 / paging resilience | ❌ Not started |
-| Cache manifest + refresh | ❌ Not started |
+| Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
 | Verified against a live environment | ❌ **Blocked on a tenant** |
 
 ## Quickstart
@@ -54,7 +54,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 Requires .NET 10.
 
 ```bash
-dotnet test          # 197 tests, no tenant required
+dotnet test          # 212 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -119,6 +119,26 @@ fail as "table not found".
 
 Use `--plan-file plan.sql` to keep the SQL in a file. `--db cache.duckdb` persists the
 fetched tables so a re-run costs nothing.
+
+### Know what is in a cache
+
+A `{{ }}` table has the right name and the right columns and only *some* of the rows.
+Nothing about it looks partial, so counting it as if it were the whole table gives a
+plausible number that is wrong. Every load records what it was:
+
+```console
+$ dvduck tables --db cache.duckdb
+crm_contact  4 rows matching 2 key(s), loaded 3h ago
+    SELECT contactid, fullname, parentcustomerid FROM contact
+    WHERE parentcustomerid IN {{SELECT accountid FROM crm_account}}
+    Partial: only the rows those keys matched. Do not read it as the whole table.
+
+logs  view, loaded 3h ago
+    webchat/*.json
+```
+
+The manifest is written inside the load's own transaction, so it can never describe rows
+that were rolled back (ADR 0009).
 
 ### Use the library
 

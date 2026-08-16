@@ -18,6 +18,12 @@ public sealed record CacheResult(
     PlanAnalysis? Plan,
     TimeSpan Elapsed)
 {
+    /// <summary>
+    /// Distinct keys a <c>{{ }}</c> query supplied, or null if there was none.
+    /// Non-null means the table holds a subset of the Dataverse table.
+    /// </summary>
+    public long? KeyCount { get; init; }
+
     public override string ToString() =>
         $"{TableName}: {RowCount:N0} rows in {Elapsed.TotalSeconds:F1}s" +
         (Plan is { FullyFolded: false } ? $" ({Plan.Problems.Count()} operation(s) ran locally)" : string.Empty);
@@ -101,7 +107,7 @@ public sealed class DataverseCache
         DuckDbIdentifier.Validate(tableName);
 
         return KeySetPushdown.FindKeyQuery(sql) is { } keyQuery
-            ? CacheMatching(keyQuery, tableName, cancellationToken)
+            ? CacheMatching(keyQuery, sql, tableName, cancellationToken)
             : CacheOne(sql, tableName, plan: null, cancellationToken);
     }
 
@@ -113,6 +119,7 @@ public sealed class DataverseCache
     /// </summary>
     private CacheResult CacheMatching(
         LocalKeyQuery keyQuery,
+        string originalSql,
         string tableName,
         CancellationToken cancellationToken)
     {
@@ -179,10 +186,17 @@ public sealed class DataverseCache
             });
         }
 
-        transaction.Commit();
         stopwatch.Stop();
 
-        return new CacheResult(tableName, rows, mapping!, firstPlan, stopwatch.Elapsed);
+        var result = new CacheResult(tableName, rows, mapping!, firstPlan, stopwatch.Elapsed)
+        {
+            KeyCount = keys.Count,
+        };
+
+        RecordManifest(result, originalSql, transaction);
+        transaction.Commit();
+
+        return result;
     }
 
     private CacheResult CacheOne(
@@ -203,17 +217,52 @@ public sealed class DataverseCache
         }
 
         var stopwatch = Stopwatch.StartNew();
+        var loader = new DuckDbBulkLoader(Connection);
 
-        var result = Fetch(sql, reader =>
-            new DuckDbBulkLoader(Connection).Load(
-                reader, tableName, Mapper,
-                progress: rows => Log?.Invoke($"{tableName}: {rows:N0} rows"),
-                cancellationToken));
+        // The load owns the transaction here rather than delegating it to
+        // DuckDbBulkLoader.Load, so the manifest row commits with the rows it
+        // describes. Same atomicity guarantee, one level up.
+        using var transaction = Connection.BeginTransaction();
+
+        var loaded = Fetch(sql, reader =>
+        {
+            var mapping = Mapper.MapReader(reader, tableName);
+            loader.CreateTable(mapping, transaction);
+
+            var rows = loader.LoadInto(
+                reader, mapping,
+                progress: written => Log?.Invoke($"{tableName}: {written:N0} rows"),
+                cancellationToken);
+
+            return new LoadResult(mapping, rows);
+        });
 
         stopwatch.Stop();
 
-        return new CacheResult(tableName, result.RowCount, result.Mapping, plan, stopwatch.Elapsed);
+        var result = new CacheResult(tableName, loaded.RowCount, loaded.Mapping, plan, stopwatch.Elapsed);
+
+        RecordManifest(result, sql, transaction);
+        transaction.Commit();
+
+        return result;
     }
+
+    /// <summary>
+    /// Writes what this table is into the cache file, inside the load's own
+    /// transaction so the record cannot outlive a rollback.
+    /// </summary>
+    private void RecordManifest(CacheResult result, string sourceSql, DuckDBTransaction transaction) =>
+        CacheManifest.Record(
+            Connection,
+            new CacheEntry(
+                result.TableName,
+                PlanStepKind.Dataverse,
+                sourceSql,
+                result.RowCount,
+                result.KeyCount,
+                DateTime.UtcNow,
+                result.Elapsed),
+            transaction);
 
     /// <summary>
     /// Runs one Dataverse query, translating service protection faults into
@@ -264,6 +313,12 @@ public sealed class DataverseCache
 
         foreach (var column in textual)
             Log?.Invoke(column.Describe());
+
+        // A view is persisted in the .duckdb file too, and reading a reused
+        // cache offline gives no other clue which path it points at.
+        CacheManifest.Record(
+            Connection,
+            new CacheEntry(viewName, PlanStepKind.Json, path, null, null, DateTime.UtcNow, TimeSpan.Zero));
 
         return textual;
     }

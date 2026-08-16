@@ -17,6 +17,7 @@ internal static class Program
             "doctor" => await DoctorAsync(args.Skip(1).ToArray()),
             "capture" => Capture(args.Skip(1).ToArray()),
             "query" => Query(args.Skip(1).ToArray()),
+            "tables" => Tables(args.Skip(1).ToArray()),
             null or "help" or "--help" or "-h" => Help(),
             _ => Unknown(command),
         };
@@ -31,6 +32,7 @@ internal static class Program
               dvduck doctor [table ...]     Verify the environment is set up for app-registration access.
               dvduck capture <table ...>    Save entity metadata to a snapshot for offline work.
               dvduck query [options]        Cache Dataverse tables, then query them alongside JSON.
+              dvduck tables --db <path>     Show what a cache file holds and how old it is.
 
             Configuration (environment variables):
               DATAVERSE_URL            https://yourorg.crm4.dynamics.com
@@ -92,6 +94,70 @@ internal static class Program
         Console.Error.WriteLine($"Unknown command '{command}'. Run 'dvduck help'.");
         return 2;
     }
+
+    /// <summary>
+    /// Prints what a cache file holds.
+    ///
+    /// A .duckdb file is meant to be reused, and a {{ }} table is a subset that
+    /// looks exactly like a full copy. This is how you find out which you have
+    /// before trusting an answer computed from it.
+    /// </summary>
+    private static int Tables(string[] args)
+    {
+        string? database = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--db" && i + 1 < args.Length)
+            {
+                database = args[++i];
+            }
+        }
+
+        if (database is null)
+        {
+            Console.Error.WriteLine("Pass --db <path>. An in-memory cache has nothing to show.");
+            return 2;
+        }
+
+        if (!File.Exists(database))
+        {
+            Console.Error.WriteLine($"No such cache file: {database}");
+            return 1;
+        }
+
+        using var duck = UtcTimestampPolicy.OpenConnection($"Data Source={database}");
+        var entries = CacheManifest.Read(duck);
+
+        if (entries.Count == 0)
+        {
+            Console.Error.WriteLine(
+                CacheManifest.Exists(duck)
+                    ? "The cache is empty."
+                    : "This file has no manifest, so nothing records what its tables are or when they were loaded.");
+            return 0;
+        }
+
+        foreach (var entry in entries)
+        {
+            Console.WriteLine(entry.Describe());
+            Console.WriteLine($"    {Indent(entry.Source)}");
+
+            if (entry.IsPartial)
+            {
+                Console.WriteLine(
+                    "    Partial: only the rows those keys matched. Do not read it as the whole table.");
+            }
+
+            Console.WriteLine();
+        }
+
+        return 0;
+    }
+
+    /// <summary>Keeps a multi-line source statement inside the indented block.</summary>
+    private static string Indent(string source) =>
+        string.Join("\n    ", source.Split('\n').Select(line => line.TrimEnd()));
 
     private static bool TryLoadOptions(out DataverseOptions options)
     {
