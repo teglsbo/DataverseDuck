@@ -13,6 +13,28 @@
       spikes out of 'dotnet pack' at the solution level.
     -->
     <IsPackable>false</IsPackable>
+
+    <!--
+      Audit transitive dependencies too, not just the ones named in a csproj.
+      Every vulnerability this repository has actually had arrived transitively.
+    -->
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Not used by any code here. It is a transitive dependency of
+      MarkMpn.Sql4Cds.Engine, which asks for 6.0.1, a version with a high
+      severity denial of service advisory, GHSA-555c-2p6r-68mm, fixed in 6.0.3.
+      Naming it explicitly lifts the resolved version to a patched one.
+
+      This lives here rather than in DataverseDuck.csproj so that it also covers
+      the spikes. MetadataSpike references the engine directly and so missed a
+      pin held only by the library, which auditing transitive packages caught.
+      Do not remove it because nothing appears to use it.
+    -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.11" />
+  </ItemGroup>
 
 </Project>
