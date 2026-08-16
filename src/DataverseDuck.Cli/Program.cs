@@ -47,6 +47,8 @@ internal static class Program
                                        the rows your local data refers to, instead of the table.
               --json <view>=<path>     Expose a JSON file or glob as a view. Repeatable.
               --run <sql>              The query to print results for.
+              --plan <sql>             A WITH block that names its Dataverse fetches and the
+                                       query in one statement. Replaces --cache and --run.
               --db <path>              DuckDB file. Default: in-memory.
               --strict                 Fail if any operation would run locally rather than
                                        inside Dataverse. Default: warn but continue.
@@ -63,6 +65,22 @@ internal static class Program
 
               Only the contacts the logs mention are fetched; the rest of the
               table is never transferred. --json is evaluated before --cache."
+
+            The same thing with --plan, which keeps the order in one statement:
+              dvduck query \
+                --json logs='webchat/*.json' \
+                --plan "WITH crm_contact AS DATAVERSE (
+                            SELECT contactid, fullname FROM contact
+                            WHERE contactid IN {{SELECT CAST(customer_id AS UUID)
+                                                 FROM logs WHERE channel = 'webchat'}}
+                        )
+                        SELECT count(DISTINCT c.contactid)
+                        FROM logs l JOIN crm_contact c ON c.contactid = CAST(l.customer_id AS UUID)
+                        WHERE l.channel = 'webchat'"
+
+              Each DATAVERSE entry is a round trip that materialises a real
+              table, top to bottom, so a later {{ }} can read an earlier one.
+              Ordinary CTEs in the same WITH are left to DuckDB.
 
             See docs/environment-setup.md for how to obtain these.
             """);
@@ -189,12 +207,13 @@ internal static class Program
         List<(string Table, string Sql)> caches = [];
         List<(string View, string Path)> jsons = [];
         string? finalSql = null;
+        string? plan = null;
         var database = ":memory:";
         var policy = FoldingPolicy.Warn;
 
         for (var i = 0; i < args.Length; i++)
         {
-            var needsValue = args[i] is "--cache" or "--json" or "--run" or "--db";
+            var needsValue = args[i] is "--cache" or "--json" or "--run" or "--db" or "--plan";
 
             if (needsValue && i + 1 >= args.Length)
             {
@@ -220,6 +239,10 @@ internal static class Program
                     finalSql = args[++i];
                     break;
 
+                case "--plan":
+                    plan = args[++i];
+                    break;
+
                 case "--db":
                     database = args[++i];
                     break;
@@ -234,9 +257,30 @@ internal static class Program
             }
         }
 
+        if (plan is not null)
+        {
+            if (caches.Count > 0 || finalSql is not null)
+            {
+                Console.Error.WriteLine("--plan already says what to fetch and what to run; drop --cache and --run.");
+                return 2;
+            }
+
+            try
+            {
+                var parsed = DataversePlanParser.Parse(plan);
+                caches.AddRange(parsed.Steps.Select(step => (step.Table, step.Sql)));
+                finalSql = parsed.FinalSql;
+            }
+            catch (FormatException e)
+            {
+                Console.Error.WriteLine($"Could not read the plan: {e.Message}");
+                return 2;
+            }
+        }
+
         if (finalSql is null)
         {
-            Console.Error.WriteLine("Nothing to run. Pass --run \"SELECT ...\".");
+            Console.Error.WriteLine("Nothing to run. Pass --run \"SELECT ...\" or --plan \"WITH ...\".");
             return 2;
         }
 
