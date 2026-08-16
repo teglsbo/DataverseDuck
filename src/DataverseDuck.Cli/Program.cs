@@ -2,6 +2,7 @@ using DataverseDuck.Configuration;
 using DataverseDuck.Diagnostics;
 using DataverseDuck.Metadata;
 using DataverseDuck.Plans;
+using Microsoft.Identity.Client;
 using Microsoft.PowerPlatform.Dataverse.Client;
 
 namespace DataverseDuck.Cli;
@@ -205,6 +206,63 @@ internal static class Program
         return false;
     }
 
+    /// <summary>
+    /// Reports the service protection budget.
+    ///
+    /// Separate from the doctor's checks because it is not pass or fail: it is
+    /// a reading, and one the SDK connection cannot take for itself. The three
+    /// counters exist only as Web API response headers, so this costs one
+    /// extra HTTP call and is never fatal -- a failure here says nothing about
+    /// whether the environment works.
+    /// </summary>
+    private static async Task ReportBudgetAsync(DataverseOptions options)
+    {
+        ServiceProtectionBudget budget;
+
+        try
+        {
+            budget = await ServiceProtectionBudget.ProbeAsync(options);
+        }
+        catch (Exception e) when (e is HttpRequestException or MsalException or TaskCanceledException)
+        {
+            Console.WriteLine($"[SKIP] Service protection budget");
+            Console.WriteLine($"       Could not read it: {e.Message}");
+            Console.WriteLine();
+            return;
+        }
+
+        Console.WriteLine("[INFO] Service protection budget");
+
+        if (budget.IsEmpty)
+        {
+            Console.WriteLine("       The environment reported none of the rate limit headers.");
+            Console.WriteLine();
+            return;
+        }
+
+        if (budget.RecommendedParallelism is { } parallelism)
+            Console.WriteLine($"       Recommended parallelism: {parallelism}");
+
+        if (budget.BurstRemaining is { } burst)
+            Console.WriteLine($"       Requests remaining:      {burst:N0}");
+
+        if (budget.TimeRemaining is { } time)
+            Console.WriteLine($"       Execution time left:     {time.TotalSeconds:N0}s");
+
+        Console.WriteLine();
+
+        foreach (var line in Wrap(
+            "Only the parallelism hint describes the environment. The two remaining counts " +
+            "are per web server, and this reading came from whichever server answered the " +
+            "probe, which need not be the one running your queries. Microsoft documents them " +
+            "as being for debugging rather than for pacing requests.", 84))
+        {
+            Console.WriteLine($"       -> {line}");
+        }
+
+        Console.WriteLine();
+    }
+
     private static async Task<int> DoctorAsync(string[] tables)
     {
         if (!TryLoadOptions(out var options))
@@ -238,6 +296,8 @@ internal static class Program
 
             Console.WriteLine();
         }
+
+        await ReportBudgetAsync(options);
 
         if (report.FirstFailure is not null)
         {
