@@ -21,9 +21,25 @@ WHERE l.channel = 'webchat'
 No explicit caching step, no manual query splitting. It is the right instinct
 and it is how the mature DuckDB connectors behave.
 
-It is not available to us. `postgres_scanner` is a C++ extension using DuckDB's
-internal `filter_pushdown` hooks. What DuckDB.NET 1.5.5 offers a managed table
-function was measured rather than assumed:
+It is not available to us. To be precise about why, because the obvious reading
+("DuckDB cannot push down predicates") is wrong:
+
+| Layer | Row predicate pushdown? |
+|---|---|
+| DuckDB engine (C++) | **Yes.** `TableFilterSet filters`, `pushdown_complex_filter`, `pushdown_expression`, `supports_pushdown` — `table_function.hpp` |
+| DuckDB C API (`duckdb.h`) | **No.** The only exported pushdown symbol is `duckdb_table_function_supports_projection_pushdown` |
+| DuckDB.NET (binds the C API) | **No**, inherits the gap |
+
+DuckDB itself pushes predicates down extensively — that is how `parquet_scan`
+and `postgres_scanner` avoid reading what they do not need. The limitation is
+the **C extension API**, which every .NET table function must go through.
+Grepping `duckdb.h` for exported symbols matching `filter|pushdown` returns
+exactly one, and it is about projections. DuckDB's own `table_function-c.cpp`
+receives the filter set into its internal init struct
+(`optional_ptr<TableFilterSet> filters`) and then exposes no accessor for it.
+
+So the capability exists one layer below us and is not reachable from managed
+code. What DuckDB.NET 1.5.5 does offer was measured rather than assumed:
 
 | Query against a C# table function | What DuckDB requested |
 |---|---|
@@ -103,6 +119,12 @@ half-populated table (ADR 0005's sibling concern).
 - Keys must be literals for folding, so rendering them is an injection boundary.
   Values are escaped or validated by type, and unrecognised types are refused
   rather than formatted.
-- If DuckDB.NET later exposes filter pushdown publicly, this becomes redundant
-  for simple predicates and should be revisited. It would still be needed for
-  the semi-join case, which requires passing join keys into the scan.
+- The unlock is not a DuckDB.NET change but a **C API** one: DuckDB would have to
+  export an accessor for the `TableFilterSet` it already plumbs into
+  `CTableInternalInitInfo`. If that lands, simple predicates could fold
+  automatically and this becomes redundant for them. It would still be needed
+  for the semi-join case, which requires join keys to reach the scan, not just
+  constant comparisons.
+- The other route is a genuine C++ DuckDB extension, which gets the full
+  `pushdown_complex_filter` surface. That means doing MSAL authentication and
+  Dataverse SDK calls from native code, which is a different project.
