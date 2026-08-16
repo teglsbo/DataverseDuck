@@ -12,6 +12,10 @@ internal static class Program
     {
         var command = args.FirstOrDefault()?.ToLowerInvariant();
 
+        // Before anything reads configuration. Real environment variables still
+        // win, so this cannot override a secret injected by CI.
+        EnvFile = DotEnvFile.LoadFromCurrentDirectory();
+
         return command switch
         {
             "doctor" => await DoctorAsync(args.Skip(1).ToArray()),
@@ -22,6 +26,9 @@ internal static class Program
             _ => Unknown(command),
         };
     }
+
+    /// <summary>The .env that was loaded, if any. Reported when configuration is incomplete.</summary>
+    private static string? EnvFile;
 
     private static int Help()
     {
@@ -168,6 +175,15 @@ internal static class Program
         }
 
         Console.Error.WriteLine($"Configuration error: {error}");
+
+        // Which file was read is the first thing you want to know when a value
+        // you believe you set is not arriving -- most often the .env is in a
+        // different directory, or an exported variable is shadowing it.
+        Console.Error.WriteLine(
+            EnvFile is null
+                ? $"No {DotEnvFile.FileName} was found in this directory or above it."
+                : $"Read {EnvFile}. Variables already exported take precedence over it.");
+
         Console.Error.WriteLine("Run 'dvduck help' for the variables, or see docs/environment-setup.md.");
         options = null!;
         return false;
