@@ -128,3 +128,36 @@ half-populated table (ADR 0005's sibling concern).
 - The other route is a genuine C++ DuckDB extension, which gets the full
   `pushdown_complex_filter` surface. That means doing MSAL authentication and
   Dataverse SDK calls from native code, which is a different project.
+
+## Correction: DuckDB does propagate join keys
+
+The bullet above understated what is available. `spikes/PushdownSpike` measures
+DuckDB 1.5.5 directly, and the semi-join case is *not* the hard part:
+
+    join keys | filter delivered to the scan
+    ----------|--------------------------------------------------
+           10 | optional: contactid IN (<10 exact GUIDs>) AND >=min AND <=max
+           50 | exact IN list
+           51 | min/max GUID range only
+         1000 | min/max GUID range only
+
+DuckDB builds the IN list from the hash join's build side and hands it to the
+scan's `init_global`, which is *before* a remote scan issues its first request.
+The cliff at 51 is `dynamic_or_filter_threshold`, default 50. Raising it with
+`SET dynamic_or_filter_threshold = 100000` restores the exact IN list at 1,000
+and 20,000 keys.
+
+So the mechanism carries exactly the payload this ADR builds by hand, with the
+right timing and the right shape. Two things still stand between that and using
+it:
+
+1. The filters are reachable only from C++. Neither `duckdb.h` nor
+   `duckdb_extension.h` exports any filter accessor -- both expose exactly one
+   pushdown symbol, `duckdb_table_function_supports_projection_pushdown` -- so
+   no C-ABI binding, DuckDB.NET included, can read them.
+2. Above the threshold the filter silently degrades to a min/max range. Over
+   random GUIDs that range spans nearly the whole key space, so it is correct
+   and useless. Nothing warns that this happened.
+
+The `{{ }}` marker stays because it is deterministic: it does not depend on a
+tunable heuristic, and it cannot silently degrade to fetching everything.
