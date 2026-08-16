@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+
+# Local cache and captured data
+*.duckdb
+*.duckdb.wal
+metadata/*.bin
+cache/
+
+# Secrets — never commit
+.env
+*.secret
+appsettings.Local.json
+appsettings.*.Local.json
+
+# Editor
+.vs/
+.vscode/
+.idea/
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
