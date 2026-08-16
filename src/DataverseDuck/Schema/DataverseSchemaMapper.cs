@@ -1,4 +1,5 @@
 using System.Data.Common;
+using MarkMpn.Sql4Cds.Engine;
 using Microsoft.Xrm.Sdk;
 
 namespace DataverseDuck.Schema;
@@ -70,7 +71,7 @@ public sealed class DataverseSchemaMapper
 
         var underlying = Nullable.GetUnderlyingType(clrType) ?? clrType;
 
-        if (underlying == typeof(EntityReference))
+        if (underlying == typeof(EntityReference) || underlying == typeof(SqlEntityReference))
         {
             yield return new ColumnMapping(name, "UUID", ordinal, ColumnKind.LookupId, underlying);
 
@@ -111,6 +112,7 @@ public sealed class DataverseSchemaMapper
         if (t == typeof(DateTime) || t == typeof(DateTimeOffset)) return "TIMESTAMP";
 
         if (t == typeof(EntityReference)) return "UUID";
+        if (t == typeof(SqlEntityReference)) return "UUID";
         if (t == typeof(OptionSetValue)) return "INTEGER";
         if (t == typeof(Money)) return DecimalType;
         if (t == typeof(object)) return "VARCHAR";
@@ -137,6 +139,13 @@ public sealed class DataverseSchemaMapper
                 return value switch
                 {
                     EntityReference reference => reference.Id,
+
+                    // A struct, so a null lookup arrives as a non-null value
+                    // with IsNull set rather than as DBNull. Reading .Id
+                    // without checking would store Guid.Empty and turn an
+                    // absent lookup into one pointing at nothing.
+                    SqlEntityReference sql => sql.IsNull ? null : sql.Id,
+
                     Guid guid => guid,
                     _ => throw new InvalidOperationException(
                         $"Expected a lookup value but got '{value.GetType().FullName}'."),
@@ -146,6 +155,7 @@ public sealed class DataverseSchemaMapper
                 return value switch
                 {
                     EntityReference reference => reference.LogicalName,
+                    SqlEntityReference sql => sql.IsNull ? null : sql.LogicalName,
                     // A bare Guid carries no target table; the column is simply unknown.
                     Guid => null,
                     _ => throw new InvalidOperationException(
@@ -168,6 +178,7 @@ public sealed class DataverseSchemaMapper
         OptionSetValue option => option.Value,
         Money money => money.Value,
         EntityReference reference => reference.Id,
+        SqlEntityReference sql => sql.IsNull ? null : sql.Id,
 
         // The appender has no concept of these; store the label.
         EntityCollection collection => collection.EntityName,
