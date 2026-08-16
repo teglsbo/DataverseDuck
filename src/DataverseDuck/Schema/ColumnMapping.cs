@@ -16,6 +16,16 @@ public enum ColumnKind
     /// (customerid, ownerid, regardingobjectid), where the id alone is ambiguous.
     /// </summary>
     LookupTargetTable,
+
+    /// <summary>
+    /// A Dataverse date or datetime whose behaviour is DateOnly or
+    /// TimeZoneIndependent: a wall-clock reading, not an instant.
+    ///
+    /// A birthdate of 1980-05-15 is that date everywhere; shifting it by a
+    /// timezone offset makes it the 14th for half the world. Kept apart from
+    /// <see cref="Scalar"/> so no timezone conversion is ever applied.
+    /// </summary>
+    WallClock,
 }
 
 /// <summary>

@@ -19,6 +19,7 @@ Measured facts that are not themselves decisions live in
 | [0007](0007-not-extending-duckdb-for-pushdown.md) | Do not extend DuckDB to push down our predicates — yet | Accepted |
 | [0008](0008-plan-syntax.md) | Let a query name its own sources | Accepted |
 | [0009](0009-cache-manifest.md) | Record what each cached table is, in the cache itself | Accepted |
+| [0010](0010-datetime-behaviour.md) | Read datetime behaviour from metadata, not from the value | Accepted |
 
 ## Why there is no CHANGELOG
 

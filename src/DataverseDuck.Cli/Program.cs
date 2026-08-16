@@ -396,6 +396,15 @@ internal static class Program
             {
                 FoldingPolicy = policy,
                 Log = message => Console.Error.WriteLine($"  {message}"),
+
+                // Metadata is what distinguishes a birthdate from an instant:
+                // the reader reports both as DateTime with Kind=Unspecified.
+                Mapper = new DataverseDuck.Schema.DataverseSchemaMapper
+                {
+                    Metadata = client is null
+                        ? null
+                        : new MarkMpn.Sql4Cds.Engine.AttributeMetadataCache(client),
+                },
             };
 
             using var cancellation = new CancellationTokenSource();
@@ -485,6 +494,14 @@ internal static class Program
             : reader.GetValue(ordinal) switch
             {
                 DateTime d => d.ToString("yyyy-MM-dd HH:mm:ss"),
+
+                // DuckDB returns these for DATE and TIME columns. Without an
+                // explicit format they fall through to ToString() and pick up
+                // the current culture, which turned a birthdate into
+                // '05/15/1980' -- unsortable, and ambiguous with 15/05.
+                DateOnly date => date.ToString("yyyy-MM-dd"),
+                TimeOnly time => time.ToString("HH:mm:ss"),
+
                 byte[] b => Convert.ToHexString(b),
                 var v => v.ToString() ?? string.Empty,
             };

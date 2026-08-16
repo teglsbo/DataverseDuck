@@ -39,6 +39,7 @@ Working end to end against a real Dataverse environment.
 | Component | State |
 |---|---|
 | `UtcTimestampPolicy` | ✅ Built, 18 tests |
+| `DateTimeBehavior` mapping (DATE vs instant) | ✅ Built, 9 tests, verified live |
 | `Sql4CdsConnectionFactory` | ✅ Built |
 | `MetadataSnapshot` / `SnapshotMetadataCache` / `MetadataCapture` | ✅ Built, 12 tests |
 | `dvduck doctor` / `dvduck capture` CLI | ✅ Built, 25 tests |
@@ -80,7 +81,7 @@ debugging session to trace, so consumers are told at build time instead of at ru
 Requires .NET 10.
 
 ```bash
-dotnet test          # 234 tests, no tenant required
+dotnet test          # 243 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -257,6 +258,18 @@ not assumed — see [ADR 0002](docs/adr/0002-utc-naive-timestamps.md).
 The short version: **every timestamp in the cache is a naive `TIMESTAMP` holding UTC**,
 and the DuckDB session is pinned to UTC. Never let a `TIMESTAMPTZ` into the cache.
 
+With one exception, and it needs metadata to see. Only Dataverse's `UserLocal` behaviour
+is an instant. `DateOnly` and `TimeZoneIndependent` are wall-clock readings: a birthdate
+of 1980-05-15 is that date everywhere, and shifting it by an offset makes it the 14th for
+anyone west of UTC. Those become `DATE` and unconverted `TIMESTAMP`.
+
+The reader cannot tell the three apart — measured live, all arrive as `DateTime` with
+`Kind=Unspecified` — so the mapper resolves each column's originating attribute from the
+reader's schema table. Give it metadata to get this; without it every datetime is treated
+as an instant, which is right for the large majority of columns. Note `Format` is *not*
+behaviour: stock attributes exist that are `Format=DateOnly` with `Behavior=UserLocal`.
+See [ADR 0010](docs/adr/0010-datetime-behaviour.md).
+
 ## Offline development
 
 SQL 4 CDS needs entity metadata to compile SQL. Synthesising it by hand does not work.
@@ -284,7 +297,7 @@ src/DataverseDuck/          Library
   Diagnostics/              Environment checks behind 'dvduck doctor'
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
-tests/DataverseDuck.Tests/  234 tests, no tenant required
+tests/DataverseDuck.Tests/  243 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/sql4cds-behaviour.md   Measured engine defaults and type mapping

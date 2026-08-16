@@ -45,6 +45,18 @@ public sealed class DataverseSchemaMapper
     public bool IncludeLookupTargetTable { get; init; } = true;
 
     /// <summary>
+    /// Entity metadata, used to read each datetime column's
+    /// <see cref="Microsoft.Xrm.Sdk.Metadata.DateTimeAttributeMetadata.DateTimeBehavior"/>.
+    ///
+    /// Optional. Without it every datetime is treated as a UTC instant, which
+    /// is right for the great majority of columns but wrong for DateOnly and
+    /// TimeZoneIndependent ones. The reader cannot tell them apart on its own:
+    /// all three arrive as <see cref="DateTime"/> with <c>Kind=Unspecified</c>
+    /// (measured), so the distinction only exists in metadata.
+    /// </summary>
+    public IAttributeMetadataCache? Metadata { get; init; }
+
+    /// <summary>
     /// Builds a table mapping from an open reader's schema.
     /// </summary>
     public TableMapping MapReader(DbDataReader reader, string tableName)
@@ -53,18 +65,70 @@ public sealed class DataverseSchemaMapper
         DuckDbIdentifier.Validate(tableName);
 
         var columns = new List<ColumnMapping>(reader.FieldCount);
+        var sources = ReadColumnSources(reader);
 
         for (var i = 0; i < reader.FieldCount; i++)
-            columns.AddRange(MapColumn(reader.GetName(i), reader.GetFieldType(i), i));
+            columns.AddRange(MapColumn(reader.GetName(i), reader.GetFieldType(i), i, sources.GetValueOrDefault(i)));
 
         return new TableMapping(tableName, columns);
+    }
+
+    /// <summary>
+    /// Reads each column's originating table and attribute from the reader's
+    /// schema table. Aliases and joins are handled by the engine: a column
+    /// selected as <c>a.createdon AS acct_created</c> still reports
+    /// <c>account</c>/<c>createdon</c> (measured).
+    ///
+    /// Returns nothing when metadata is unavailable, or when the provider
+    /// declines to produce a schema table -- a computed column has no source
+    /// attribute, and that is not an error.
+    /// </summary>
+    private Dictionary<int, (string Table, string Column)> ReadColumnSources(DbDataReader reader)
+    {
+        var sources = new Dictionary<int, (string, string)>();
+
+        if (Metadata is null)
+            return sources;
+
+        System.Data.DataTable? schema;
+
+        try
+        {
+            schema = reader.GetSchemaTable();
+        }
+        catch (Exception e) when (e is NotSupportedException or InvalidOperationException)
+        {
+            return sources;
+        }
+
+        if (schema is null)
+            return sources;
+
+        foreach (System.Data.DataRow row in schema.Rows)
+        {
+            if (row["ColumnOrdinal"] is not int ordinal) continue;
+            if (row["BaseTableName"] is not string table || string.IsNullOrEmpty(table)) continue;
+            if (row["BaseColumnName"] is not string column || string.IsNullOrEmpty(column)) continue;
+
+            sources[ordinal] = (table, column);
+        }
+
+        return sources;
     }
 
     /// <summary>
     /// Maps one source column. Returns more than one mapping for a lookup when
     /// <see cref="IncludeLookupTargetTable"/> is set.
     /// </summary>
-    public IEnumerable<ColumnMapping> MapColumn(string name, Type clrType, int ordinal)
+    public IEnumerable<ColumnMapping> MapColumn(string name, Type clrType, int ordinal) =>
+        MapColumn(name, clrType, ordinal, null);
+
+    /// <summary>
+    /// Maps one source column, consulting metadata for the originating
+    /// attribute when it is known.
+    /// </summary>
+    public IEnumerable<ColumnMapping> MapColumn(
+        string name, Type clrType, int ordinal, (string Table, string Column)? source)
     {
         DuckDbIdentifier.Validate(name);
         ArgumentNullException.ThrowIfNull(clrType);
@@ -82,7 +146,63 @@ public sealed class DataverseSchemaMapper
             yield break;
         }
 
+        if (underlying == typeof(DateTime) || underlying == typeof(DateTimeOffset))
+        {
+            var mapping = ResolveDateTimeMapping(source);
+
+            yield return new ColumnMapping(
+                name,
+                mapping.DuckDbType,
+                ordinal,
+                mapping.ConvertToUtc ? ColumnKind.Scalar : ColumnKind.WallClock,
+                underlying);
+
+            yield break;
+        }
+
         yield return new ColumnMapping(name, ToDuckDbType(underlying), ordinal, ColumnKind.Scalar, underlying);
+    }
+
+    /// <summary>
+    /// Applies rule 6: only UserLocal is a true UTC instant. Falls back to
+    /// treating the column as an instant when the attribute cannot be resolved,
+    /// which is both the common case and the safe one -- the great majority of
+    /// Dataverse datetimes are UserLocal.
+    /// </summary>
+    private DateTimeMapping ResolveDateTimeMapping((string Table, string Column)? source)
+    {
+        var instant = new DateTimeMapping("TIMESTAMP", ConvertToUtc: true);
+
+        if (Metadata is null || source is null)
+            return instant;
+
+        var (table, column) = source.Value;
+
+        Microsoft.Xrm.Sdk.Metadata.EntityMetadata entity;
+
+        try
+        {
+            // Deliberately the indexer, not TryGetValue. A live
+            // AttributeMetadataCache loads lazily, so TryGetValue reports false
+            // for an entity that simply has not been fetched yet (measured);
+            // using it here silently skipped metadata on every first call. The
+            // indexer fetches on demand and throws only when the entity really
+            // is unknown.
+            entity = Metadata[table];
+        }
+        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
+        {
+            // An unresolvable table is not an error here: the column may come
+            // from something with no entity behind it. Treating it as an
+            // instant is the same answer as having no metadata at all.
+            return instant;
+        }
+
+        var attribute = entity?.Attributes?
+            .OfType<Microsoft.Xrm.Sdk.Metadata.DateTimeAttributeMetadata>()
+            .FirstOrDefault(a => string.Equals(a.LogicalName, column, StringComparison.OrdinalIgnoreCase));
+
+        return attribute is null ? instant : UtcTimestampPolicy.MapDateTimeAttribute(attribute);
     }
 
     /// <summary>
@@ -162,10 +282,31 @@ public sealed class DataverseSchemaMapper
                         $"Expected a lookup value but got '{value.GetType().FullName}'."),
                 };
 
+            case ColumnKind.WallClock:
+                return ConvertWallClock(value);
+
             default:
                 return ConvertScalar(value);
         }
     }
+
+    /// <summary>
+    /// A wall-clock value is stored exactly as it arrived. No timezone
+    /// conversion, in either direction: a DateOnly birthdate or a
+    /// TimeZoneIndependent appointment time means the same reading everywhere,
+    /// and shifting it by an offset changes what it says.
+    /// </summary>
+    private static object? ConvertWallClock(object value) => value switch
+    {
+        // The offset is dropped rather than applied. A wall-clock attribute
+        // should not carry one; if it somehow does, the reading is what was
+        // meant and the offset is noise.
+        DateTimeOffset offset => offset.DateTime,
+
+        DateTime dateTime => DateTime.SpecifyKind(dateTime, DateTimeKind.Unspecified),
+
+        _ => value,
+    };
 
     private static object? ConvertScalar(object value) => value switch
     {
