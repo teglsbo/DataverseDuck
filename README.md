@@ -47,7 +47,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 | `ExecutionPlanAnalyzer` (folding guard) | ✅ Built, 27 tests |
 | `DataverseThrottling` (429 explanation) | ✅ Built, unverified against a tenant |
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
-| Verified against a live environment | ❌ **Blocked on a tenant** |
+| Verified against a live environment | ✅ All 8 doctor checks pass; two-hop JSON-to-Dataverse join verified |
 
 ## Quickstart
 
