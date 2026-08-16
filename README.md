@@ -45,7 +45,7 @@ Early. The foundations are built and tested; nothing has run against a real tena
 | `DataverseSchemaMapper` (reader → DDL) | ✅ Built, 26 tests |
 | `DuckDbBulkLoader` (reader → Appender) | ✅ Built, 10 tests |
 | `ExecutionPlanAnalyzer` (folding guard) | ✅ Built, 27 tests |
-| 429 / paging resilience | ❌ Not started |
+| `DataverseThrottling` (429 explanation) | ✅ Built, unverified against a tenant |
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
 | Verified against a live environment | ❌ **Blocked on a tenant** |
 
