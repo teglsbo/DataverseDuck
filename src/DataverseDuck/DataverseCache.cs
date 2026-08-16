@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Diagnostics;
 using DataverseDuck.Plans;
 using DataverseDuck.Schema;
@@ -69,10 +70,27 @@ public sealed class DataverseCache
     /// <summary>Receives plan warnings and progress. Defaults to discarding them.</summary>
     public Action<string>? Log { get; init; }
 
+    /// <summary>Controls how local key sets are pushed into Dataverse.</summary>
+    public KeySetPushdown Pushdown { get; init; } = new();
+
     /// <summary>
     /// Runs a query against Dataverse and stores the result as a DuckDB table.
     /// </summary>
-    /// <param name="sql">T-SQL, compiled to FetchXML by SQL 4 CDS.</param>
+    /// <param name="sql">
+    /// T-SQL, compiled to FetchXML by SQL 4 CDS.
+    ///
+    /// May embed one DuckDB query in <c>{{ }}</c> to fetch only the rows a
+    /// local table or JSON file refers to:
+    ///
+    /// <code>
+    /// SELECT contactid, fullname FROM contact
+    /// WHERE contactid IN {{SELECT DISTINCT customer_id FROM logs WHERE channel = 'webchat'}}
+    /// </code>
+    ///
+    /// The inner query runs locally; its results are inlined as literals and
+    /// sent in batches, so a large table is filtered server-side rather than
+    /// pulled across and joined here.
+    /// </param>
     /// <param name="tableName">Destination table. Replaced if it exists.</param>
     /// <exception cref="PlanNotFoldedException">
     /// The plan does more local work than <see cref="FoldingPolicy"/> permits.
@@ -82,7 +100,98 @@ public sealed class DataverseCache
         ArgumentException.ThrowIfNullOrWhiteSpace(sql);
         DuckDbIdentifier.Validate(tableName);
 
-        var plan = _source.Analyze(sql);
+        return KeySetPushdown.FindKeyQuery(sql) is { } keyQuery
+            ? CacheMatching(keyQuery, tableName, cancellationToken)
+            : CacheOne(sql, tableName, plan: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Fetches only the Dataverse rows whose key appears in a local result set.
+    ///
+    /// DuckDB decides what is needed; Dataverse does the filtering. Neither
+    /// side sends the other more than it must.
+    /// </summary>
+    private CacheResult CacheMatching(
+        LocalKeyQuery keyQuery,
+        string tableName,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var keys = Pushdown.ReadKeys(Connection, keyQuery.Sql);
+
+        Log?.Invoke($"{tableName}: {keys.Count:N0} distinct key(s) from the local query");
+
+        var loader = new DuckDbBulkLoader(Connection);
+        using var transaction = Connection.BeginTransaction();
+
+        TableMapping? mapping = null;
+        var rows = 0L;
+        PlanAnalysis? firstPlan = null;
+
+        if (keys.Count == 0)
+        {
+            // Nothing local refers to Dataverse, so there is nothing to fetch.
+            // Still create the table: an empty table joins to nothing, whereas
+            // a missing one turns the user's next query into an error.
+            Log?.Invoke($"{tableName}: no keys, so Dataverse was not queried");
+        }
+
+        foreach (var batch in Pushdown.Batch(keys))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var batchSql = keyQuery.Expand(batch);
+            var plan = _source.Analyze(batchSql);
+            firstPlan ??= plan;
+
+            if (plan is not null)
+            {
+                if (!plan.FullyFolded)
+                    Log?.Invoke(plan.Describe());
+
+                if (ExecutionPlanAnalyzer.IsRejectedBy(plan, FoldingPolicy))
+                    throw new PlanNotFoldedException(plan);
+            }
+
+            rows += Fetch(batchSql, reader =>
+            {
+                if (mapping is null)
+                {
+                    mapping = Mapper.MapReader(reader, tableName);
+                    loader.CreateTable(mapping, transaction);
+                }
+
+                return loader.LoadInto(reader, mapping, null, cancellationToken);
+            });
+
+            Log?.Invoke($"{tableName}: {rows:N0} rows after {Math.Min(rows, batch.Count)} of {keys.Count:N0} keys");
+        }
+
+        if (mapping is null)
+        {
+            // No batch ran, so the schema is unknown. Ask Dataverse for the
+            // shape without asking for any rows.
+            Fetch(keyQuery.Expand([Guid.Empty]), reader =>
+            {
+                mapping = Mapper.MapReader(reader, tableName);
+                loader.CreateTable(mapping, transaction);
+                return 0L;
+            });
+        }
+
+        transaction.Commit();
+        stopwatch.Stop();
+
+        return new CacheResult(tableName, rows, mapping!, firstPlan, stopwatch.Elapsed);
+    }
+
+    private CacheResult CacheOne(
+        string sql,
+        string tableName,
+        PlanAnalysis? plan,
+        CancellationToken cancellationToken)
+    {
+        plan ??= _source.Analyze(sql);
 
         if (plan is not null)
         {
@@ -95,17 +204,26 @@ public sealed class DataverseCache
 
         var stopwatch = Stopwatch.StartNew();
 
+        var result = Fetch(sql, reader =>
+            new DuckDbBulkLoader(Connection).Load(
+                reader, tableName, Mapper,
+                progress: rows => Log?.Invoke($"{tableName}: {rows:N0} rows"),
+                cancellationToken));
+
+        stopwatch.Stop();
+
+        return new CacheResult(tableName, result.RowCount, result.Mapping, plan, stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Runs one Dataverse query, translating service protection faults into
+    /// something that says which limit was hit and what to do about it.
+    /// </summary>
+    private T Fetch<T>(string sql, Func<DbDataReader, T> read)
+    {
         try
         {
-            var result = _source.Query(sql, reader =>
-                new DuckDbBulkLoader(Connection).Load(
-                    reader, tableName, Mapper,
-                    progress: rows => Log?.Invoke($"{tableName}: {rows:N0} rows"),
-                    cancellationToken));
-
-            stopwatch.Stop();
-
-            return new CacheResult(tableName, result.RowCount, result.Mapping, plan, stopwatch.Elapsed);
+            return _source.Query(sql, read);
         }
         catch (Exception e) when (DataverseThrottling.Explain(e) is { } explanation)
         {

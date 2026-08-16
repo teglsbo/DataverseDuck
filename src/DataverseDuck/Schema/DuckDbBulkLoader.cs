@@ -57,7 +57,24 @@ public sealed class DuckDbBulkLoader(DuckDBConnection connection)
     }
 
     /// <summary>
+    /// Creates an empty table from a mapping. Used when a load arrives in
+    /// several batches and the table must exist before the first one lands.
+    /// </summary>
+    public void CreateTable(TableMapping mapping, DuckDBTransaction? transaction = null)
+    {
+        ArgumentNullException.ThrowIfNull(mapping);
+
+        using var create = _connection.CreateCommand();
+        create.Transaction = transaction;
+        create.CommandText = mapping.ToCreateTableSql();
+        create.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Loads into an existing table using a known mapping.
+    ///
+    /// Does not open a transaction, so several batches can be committed
+    /// together as one atomic load.
     /// </summary>
     public long LoadInto(
         DbDataReader reader,

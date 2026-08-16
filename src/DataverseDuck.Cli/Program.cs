@@ -43,19 +43,26 @@ internal static class Program
 
             Options for 'query':
               --cache <table>=<sql>    Run SQL against Dataverse into a DuckDB table. Repeatable.
+                                       The SQL may embed one DuckDB query in {{ }} to fetch only
+                                       the rows your local data refers to, instead of the table.
               --json <view>=<path>     Expose a JSON file or glob as a view. Repeatable.
               --run <sql>              The query to print results for.
               --db <path>              DuckDB file. Default: in-memory.
               --strict                 Fail if any operation would run locally rather than
                                        inside Dataverse. Default: warn but continue.
 
-            Example:
+            Example -- how many contacts had webchat messages:
               dvduck query \
-                --cache crm_account="SELECT accountid, name FROM account" \
-                --json logs='logs/*.json' \
-                --run "SELECT a.name, count(*) FROM logs l
-                       JOIN crm_account a ON a.accountid = CAST(l.account_id AS UUID)
-                       GROUP BY a.name"
+                --json logs='webchat/*.json' \
+                --cache crm_contact="SELECT contactid, fullname FROM contact
+                                     WHERE contactid IN {{SELECT CAST(customer_id AS UUID)
+                                                          FROM logs WHERE channel = 'webchat'}}" \
+                --run "SELECT count(DISTINCT c.contactid)
+                       FROM logs l JOIN crm_contact c ON c.contactid = CAST(l.customer_id AS UUID)
+                       WHERE l.channel = 'webchat'"
+
+              Only the contacts the logs mention are fetched; the rest of the
+              table is never transferred. --json is evaluated before --cache."
 
             See docs/environment-setup.md for how to obtain these.
             """);
@@ -280,14 +287,16 @@ internal static class Program
                 cancellation.Cancel();
             };
 
+            // JSON first: a --cache statement may embed a {{ }} query over these
+            // views to fetch only the Dataverse rows the local data refers to.
+            foreach (var (name, location) in jsons)
+                cache.RegisterJson(name, location);
+
             foreach (var (name, statement) in caches)
             {
                 Console.Error.WriteLine($"Caching {name}...");
                 Console.Error.WriteLine($"  {cache.Cache(statement, name, cancellation.Token)}");
             }
-
-            foreach (var (name, location) in jsons)
-                cache.RegisterJson(name, location);
 
             using var reader = cache.Query(finalSql);
             WriteTable(reader);
