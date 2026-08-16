@@ -168,6 +168,10 @@ This is also the quickest way to see how wide these tables are: `account` has 21
 attributes and `contact` 311, counting derived ones like `accountidname`. `SELECT *` is
 rarely what you want.
 
+See [docs/metadata.md](docs/metadata.md) for worked examples from "how many tables are
+there" up to joining `entity` to `attribute`, including how to find what a lookup points
+at and how to audit which datetime columns are wall-clock.
+
 **These queries need a live connection.** Run against a captured snapshot they fail with
 `RetrieveMetadataChanges`: the engine answers metadata queries by calling the service and
 ignores the injected metadata cache, even though the snapshot holds the same information.
@@ -355,6 +359,7 @@ tests/DataverseDuck.Tests/  243 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/large-tables.md        Measured limits, and where key-set pushdown stops paying
+docs/metadata.md            Querying the schema itself, simple to complex
 docs/sql4cds-behaviour.md   Measured engine defaults and type mapping
 docs/adr/                   Architecture decision records
 Directory.Build.props       Shared package metadata; nothing packs unless it opts in

@@ -93,6 +93,20 @@ five requests of 2,000 keys take about 3s in total. The superlinear cost is
 per-request, so splitting a large key set is strictly faster, and it also keeps
 each request well inside the execution-time budget.
 
+These numbers come from issuing the `IN` list directly. **`{{ }}` already chunks
+for you** at `KeySetPushdown.BatchSize`, currently 500 keys per round trip, so a
+single enormous request is not something a plan can produce by accident:
+
+```console
+  a: 533 distinct key(s) from the local query
+  a: 19,657 rows after 500 of 533 keys
+  a: 20,952 rows after 33 of 533 keys
+```
+
+500 sits inside the flat region below 1,000 keys where the filter is free, so it
+is at least as fast as the 2,000 measured above while keeping any single failed
+request cheap to retry.
+
 ## Where the crossover is
 
 A full scan of this table costs 7s. Pushing 10,000 keys also costs 7s. So on
@@ -103,8 +117,9 @@ As a rule of thumb, with a table of *N* rows and *K* keys:
 - **K < N/5** — push the keys. This is the normal case and what `{{ }}` exists for.
 - **K > N/5** — read the whole table and join locally. You are paying more to
   describe the subset than to fetch everything.
-- **K > 10,000** — chunk into requests of about 2,000, or reconsider: a key set
-  that large usually means the local query is not selective enough.
+- **K > 10,000** — reconsider rather than tune: `{{ }}` chunks the requests
+  already, so the cost here is the number of round trips, and a key set this
+  large usually means the local query is not selective enough.
 
 Note this ratio is about *cost*, not correctness, and it moves with column
 width. A table with 300 wide columns scans far more slowly than
