@@ -7,7 +7,15 @@
     <Nullable>enable</Nullable>
     <AssemblyName>dvduck</AssemblyName>
     <RootNamespace>DataverseDuck.Cli</RootNamespace>
-    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!--
+      Not invariant. SQL 4 CDS builds SQL Server collations in a static
+      constructor, which needs real culture data; under InvariantGlobalization
+      the whole engine fails to initialise with a TypeInitializationException
+      that names none of this. Found on the first run against a real tenant;
+      the tests never saw it because this property is only set here.
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
