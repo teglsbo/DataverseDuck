@@ -34,7 +34,7 @@ See [`docs/adr`](docs/adr) for why this design and not the alternatives.
 
 ## Status
 
-Early. The foundations are built and tested; nothing has run against a real tenant yet.
+Working end to end against a real Dataverse environment.
 
 | Component | State |
 |---|---|
@@ -45,7 +45,10 @@ Early. The foundations are built and tested; nothing has run against a real tena
 | `DataverseSchemaMapper` (reader → DDL) | ✅ Built, 26 tests |
 | `DuckDbBulkLoader` (reader → Appender) | ✅ Built, 10 tests |
 | `ExecutionPlanAnalyzer` (folding guard) | ✅ Built, 27 tests |
-| `DataverseThrottling` (429 explanation) | ✅ Built, unverified against a tenant |
+| `DataversePlanParser` (the `WITH` form) | ✅ Built, 28 tests |
+| `DataverseCache` / key-set pushdown | ✅ Built, 28 tests |
+| `.env` loading, `dvduck doctor` remedies | ✅ Built, 17 tests |
+| `DataverseThrottling` (429 explanation) | ✅ Built, not yet provoked on a tenant |
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
 | Verified against a live environment | ✅ All 8 doctor checks pass; two-hop JSON-to-Dataverse join verified |
 
@@ -63,9 +66,7 @@ Setting up headless access takes about 20 minutes and spans three portals.
 Follow [docs/environment-setup.md](docs/environment-setup.md), then verify:
 
 ```bash
-export DATAVERSE_URL="https://yourorg.crm4.dynamics.com"
-export DATAVERSE_TENANT_ID=...  DATAVERSE_CLIENT_ID=...  DATAVERSE_CLIENT_SECRET=...
-
+cp .env.example .env     # then fill it in; it is gitignored, chmod 600 it
 dotnet run --project src/DataverseDuck.Cli -- doctor account contact
 ```
 
@@ -120,6 +121,33 @@ fail as "table not found".
 Use `--plan-file plan.sql` to keep the SQL in a file. `--db cache.duckdb` persists the
 fetched tables so a re-run costs nothing.
 
+`--plan` is the only form. An earlier `--json` / `--cache` / `--run` flag form was removed
+because it left the dependency order implicit in the order the flags happened to appear;
+those flags now print the equivalent plan rather than a bare "unknown option".
+
+### Ask about the schema
+
+Dataverse metadata is queryable as ordinary tables — `metadata.entity`,
+`metadata.attribute`, `metadata.relationship_1_n` (and `_n_1`, `_n_n`, `alternate_key`,
+`value`). Nothing special is needed to use them: a `DATAVERSE` entry is T-SQL, so they
+cache into DuckDB like any other table and can be searched, joined and exported.
+
+```bash
+dvduck query --db schema.duckdb --plan "
+  WITH columns AS DATAVERSE (SELECT entitylogicalname, logicalname, attributetypename
+                             FROM metadata.attribute WHERE entitylogicalname = 'contact')
+  COPY (SELECT * FROM columns ORDER BY logicalname)
+  TO 'contact-columns.json' (FORMAT JSON, ARRAY true)"
+```
+
+This is also the quickest way to see how wide these tables are: `account` has 215
+attributes and `contact` 311, counting derived ones like `accountidname`. `SELECT *` is
+rarely what you want.
+
+**These queries need a live connection.** Run against a captured snapshot they fail with
+`RetrieveMetadataChanges`: the engine answers metadata queries by calling the service and
+ignores the injected metadata cache, even though the snapshot holds the same information.
+
 ### Know what is in a cache
 
 A `{{ }}` table has the right name and the right columns and only *some* of the rows.
@@ -140,6 +168,18 @@ logs  view, loaded 3h ago
 The manifest is written inside the load's own transaction, so it can never describe rows
 that were rolled back (ADR 0009).
 
+### How results are printed
+
+Tab-separated to **stdout**: a header row, then the data. Timestamps print as
+`yyyy-MM-dd HH:mm:ss` (naive UTC, per ADR 0002), `byte[]` as hex, NULL as an empty field.
+Progress lines and the trailing `(2 row(s))` go to **stderr**, so `dvduck query ... > out.tsv`
+gives a clean file.
+
+TSV has no escaping, so a value containing a tab or a newline will break the layout, and
+an empty string is indistinguishable from NULL. When either matters, let DuckDB write the
+file instead — `COPY (...) TO 'out.json' (FORMAT JSON, ARRAY true)` works as the final
+statement of a plan, as does `FORMAT CSV` or `FORMAT PARQUET`.
+
 ### Use the library
 
 ```csharp
@@ -152,6 +192,11 @@ using var crm = Sql4CdsConnectionFactory.CreateWithClientSecret(
 // Opens DuckDB with the session pinned to UTC.
 using var duck = UtcTimestampPolicy.OpenConnection("Data Source=cache.duckdb");
 ```
+
+**Do not set `InvariantGlobalization` to `true`** in a project that uses this library.
+SQL 4 CDS builds SQL Server collations in a static constructor that needs real culture
+data; without it the engine fails to initialise with a `TypeInitializationException`
+naming none of this. Found on the first run against a real tenant.
 
 Then join the two worlds:
 
@@ -216,7 +261,7 @@ src/DataverseDuck/          Library
   Diagnostics/              Environment checks behind 'dvduck doctor'
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
-tests/DataverseDuck.Tests/  118 tests, no tenant required
+tests/DataverseDuck.Tests/  229 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/sql4cds-behaviour.md   Measured engine defaults and type mapping
@@ -231,6 +276,8 @@ They are kept because the ADRs cite them as evidence. They are not part of the b
 | Spike | Question | Outcome |
 |---|---|---|
 | `AppenderSpike` | Which CLR types does the DuckDB Appender accept? | 16/16 types, ~440k rows/sec |
+| `PushdownSpike` | Does DuckDB push join keys into a table function? | Only as a range above ~50 keys (ADR 0007) |
+| `SeedData` | Give a live environment known rows to join against | 2 accounts, 4 contacts, fixed GUIDs |
 | `MetadataSpike` | Can SQL 4 CDS run without a live connection? | Yes, but metadata must be captured, not synthesised |
 | `TimezoneSpike` | How do timestamps behave across the seam? | Six rules, now enforced in code |
 
