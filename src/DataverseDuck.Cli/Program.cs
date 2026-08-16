@@ -57,6 +57,9 @@ internal static class Program
                                        one statement.
               --plan-file <path>       Read that plan from a file instead.
               --db <path>              DuckDB file. Default: in-memory.
+              --format <name>          tsv (default), csv or json. All three escape
+                                       their delimiters, so a field containing a tab,
+                                       comma or newline cannot corrupt the output.
               --strict                 Fail if any operation would run locally rather than
                                        inside Dataverse. Default: warn but continue.
 
@@ -282,10 +285,11 @@ internal static class Program
         string? plan = null;
         var database = ":memory:";
         var policy = FoldingPolicy.Warn;
+        var format = OutputFormat.Tsv;
 
         for (var i = 0; i < args.Length; i++)
         {
-            var needsValue = args[i] is "--db" or "--plan" or "--plan-file";
+            var needsValue = args[i] is "--db" or "--plan" or "--plan-file" or "--format";
 
             if (needsValue && i + 1 >= args.Length)
             {
@@ -326,6 +330,15 @@ internal static class Program
 
                 case "--db":
                     database = args[++i];
+                    break;
+
+                case "--format":
+                    if (!ResultWriter.TryParseFormat(args[++i], out format, out var formatError))
+                    {
+                        Console.Error.WriteLine(formatError);
+                        return 2;
+                    }
+
                     break;
 
                 case "--strict":
@@ -428,7 +441,7 @@ internal static class Program
             }
 
             using var reader = cache.Query(finalSql);
-            WriteTable(reader);
+            WriteResults(reader, format);
             return 0;
         }
         catch (DataverseThrottledException e)
@@ -461,44 +474,15 @@ internal static class Program
     }
 
     /// <summary>
-    /// Prints results as tab-separated values: greppable, and pasteable into a
-    /// spreadsheet. Timestamps are round-tripped in ISO 8601 so the naive-UTC
-    /// convention survives being copied elsewhere.
+    /// Writes results to stdout. The row count goes to stderr so that
+    /// redirecting stdout gives a clean, parseable file.
     /// </summary>
-    private static void WriteTable(System.Data.Common.DbDataReader reader)
+    private static void WriteResults(System.Data.Common.DbDataReader reader, OutputFormat format)
     {
-        Console.WriteLine(string.Join('\t',
-            Enumerable.Range(0, reader.FieldCount).Select(reader.GetName)));
-
-        var rows = 0L;
-
-        while (reader.Read())
-        {
-            Console.WriteLine(string.Join('\t',
-                Enumerable.Range(0, reader.FieldCount).Select(i => Format(reader, i))));
-            rows++;
-        }
+        var rows = ResultWriter.Write(reader, Console.Out, format);
 
         Console.Error.WriteLine($"\n({rows:N0} row(s))");
     }
-
-    private static string Format(System.Data.Common.DbDataReader reader, int ordinal) =>
-        reader.IsDBNull(ordinal)
-            ? string.Empty
-            : reader.GetValue(ordinal) switch
-            {
-                DateTime d => d.ToString("yyyy-MM-dd HH:mm:ss"),
-
-                // DuckDB returns these for DATE and TIME columns. Without an
-                // explicit format they fall through to ToString() and pick up
-                // the current culture, which turned a birthdate into
-                // '05/15/1980' -- unsortable, and ambiguous with 15/05.
-                DateOnly date => date.ToString("yyyy-MM-dd"),
-                TimeOnly time => time.ToString("HH:mm:ss"),
-
-                byte[] b => Convert.ToHexString(b),
-                var v => v.ToString() ?? string.Empty,
-            };
 
     /// <summary>
     /// Used when no Dataverse connection was opened because nothing asked for

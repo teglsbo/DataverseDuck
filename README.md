@@ -194,15 +194,36 @@ that were rolled back (ADR 0009).
 
 ### How results are printed
 
-Tab-separated to **stdout**: a header row, then the data. Timestamps print as
-`yyyy-MM-dd HH:mm:ss` (naive UTC, per ADR 0002), `byte[]` as hex, NULL as an empty field.
-Progress lines and the trailing `(2 row(s))` go to **stderr**, so `dvduck query ... > out.tsv`
-gives a clean file.
+`--format tsv` (the default), `csv` or `json`, to **stdout**. Progress lines and the
+trailing `(2 row(s))` go to **stderr**, so `dvduck query ... > out.csv` gives a clean file.
 
-TSV has no escaping, so a value containing a tab or a newline will break the layout, and
-an empty string is indistinguishable from NULL. When either matters, let DuckDB write the
-file instead — `COPY (...) TO 'out.json' (FORMAT JSON, ARRAY true)` works as the final
-statement of a plan, as does `FORMAT CSV` or `FORMAT PARQUET`.
+All three escape their own delimiters, so a `description` containing a tab, a comma or a
+newline cannot silently add a column or split a row:
+
+```console
+$ dvduck query --format csv --plan "WITH d AS JSON ('nasty.json') SELECT * FROM d"
+id,name,note
+1,"Acme, Inc","line one
+line two"
+2,"He said ""hi""",Åse Ø Ærø
+```
+
+- **csv** is RFC 4180: fields containing `,` `"` CR or LF are quoted, embedded quotes are
+  doubled, and records end with CRLF as section 2.1 requires. Verified by round-tripping
+  hostile values through Python's `csv` reader, not only through our own writer.
+- **tsv** has no escape mechanism in its media type, so values are escaped with
+  backslashes (`\t`, `\n`, `\r`, `\\`) the way Postgres `COPY ... TO` does in text mode.
+  Lossless and reversible.
+- **json** is the only format that distinguishes NULL from an empty string, and it keeps
+  numbers and booleans unquoted. Non-ASCII stays literal, so Danish text is readable
+  rather than `\u00C5`.
+
+Common to all: timestamps as `yyyy-MM-dd HH:mm:ss` (naive UTC, per ADR 0002), dates as
+`yyyy-MM-dd`, `byte[]` as hex, all numbers formatted invariantly so a decimal comma can
+never appear inside a CSV field.
+
+For files, DuckDB can also write directly — `COPY (...) TO 'out.parquet' (FORMAT PARQUET)`
+works as the final statement of a plan, as does `FORMAT JSON` or `FORMAT CSV`.
 
 ### Use the library
 
