@@ -1,4 +1,5 @@
 using System.Data;
+using MarkMpn.Sql4Cds.Engine;
 using DataverseDuck.Schema;
 using DuckDB.NET.Data;
 using Microsoft.Xrm.Sdk;
@@ -80,6 +81,30 @@ public class SchemaMapperTests
 
         var column = Assert.Single(mapper.MapColumn("ownerid", typeof(EntityReference), 0));
         Assert.Equal("UUID", column.DuckDbType);
+    }
+
+    [Fact]
+    public void The_engines_own_lookup_type_maps_the_same_as_the_sdks()
+    {
+        // A live query returns SqlEntityReference where the fakes returned
+        // EntityReference. The DDL must not depend on which one turned up.
+        var sdk = _mapper.MapColumn("primarycontactid", typeof(EntityReference), 3).ToList();
+        var engine = _mapper.MapColumn("primarycontactid", typeof(SqlEntityReference), 3).ToList();
+
+        Assert.Equal(sdk.Select(Describe), engine.Select(Describe));
+        Assert.Equal("UUID", _mapper.ToDuckDbType(typeof(SqlEntityReference)));
+    }
+
+    [Fact]
+    public void A_nullable_engine_lookup_is_still_a_lookup()
+    {
+        // It is a struct, so unlike EntityReference it can arrive as
+        // SqlEntityReference? and must be unwrapped before the type test.
+        var columns = _mapper.MapColumn("ownerid", typeof(SqlEntityReference?), 0).ToList();
+
+        Assert.Equal(2, columns.Count);
+        Assert.Equal(ColumnKind.LookupId, columns[0].Kind);
+        Assert.Equal(ColumnKind.LookupTargetTable, columns[1].Kind);
     }
 
     private static (string, string, ColumnKind) Describe(ColumnMapping c) => (c.Name, c.DuckDbType, c.Kind);
@@ -177,10 +202,50 @@ public class ValueConversionTests
         Assert.Null(DataverseSchemaMapper.ConvertValue(id, ColumnKind.LookupTargetTable));
     }
 
+    // The engine returns its own SqlEntityReference, not the SDK's
+    // EntityReference. Every test before the first live run fed the mapper SDK
+    // types, because that is what a fake IOrganizationService produces, so this
+    // whole shape went untested until a real tenant rejected it.
+    [Fact]
+    public void The_engines_own_lookup_type_yields_its_id_and_target_table()
+    {
+        var id = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var reference = new SqlEntityReference("offline", "contact", id);
+
+        Assert.Equal(id, DataverseSchemaMapper.ConvertValue(reference, ColumnKind.LookupId));
+        Assert.Equal("contact", DataverseSchemaMapper.ConvertValue(reference, ColumnKind.LookupTargetTable));
+    }
+
+    [Fact]
+    public void A_null_engine_lookup_stores_null_rather_than_an_empty_guid()
+    {
+        // SqlEntityReference is a struct, so an absent lookup arrives as a
+        // non-null value with IsNull set rather than as DBNull. Reading .Id
+        // unconditionally would store Guid.Empty: a row that silently claims to
+        // point at nothing instead of admitting it points nowhere.
+        var absent = SqlEntityReference.Null;
+
+        Assert.True(absent.IsNull);
+        Assert.Null(DataverseSchemaMapper.ConvertValue(absent, ColumnKind.LookupId));
+        Assert.Null(DataverseSchemaMapper.ConvertValue(absent, ColumnKind.LookupTargetTable));
+    }
+
+    [Fact]
+    public void An_engine_lookup_in_a_scalar_column_still_reduces_to_its_id()
+    {
+        var id = Guid.Parse("33333333-3333-3333-3333-333333333333");
+
+        Assert.Equal(
+            id,
+            DataverseSchemaMapper.ConvertValue(
+                new SqlEntityReference("offline", "account", id), ColumnKind.Scalar));
+
+        Assert.Null(DataverseSchemaMapper.ConvertValue(SqlEntityReference.Null, ColumnKind.Scalar));
+    }
+
     [Fact]
     public void Sdk_wrappers_are_unwrapped()
-    {
-        Assert.Equal(3, DataverseSchemaMapper.ConvertValue(new OptionSetValue(3), ColumnKind.Scalar));
+    {        Assert.Equal(3, DataverseSchemaMapper.ConvertValue(new OptionSetValue(3), ColumnKind.Scalar));
         Assert.Equal(12.34m, DataverseSchemaMapper.ConvertValue(new Money(12.34m), ColumnKind.Scalar));
     }
 

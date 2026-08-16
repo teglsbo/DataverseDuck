@@ -42,7 +42,7 @@ Working end to end against a real Dataverse environment.
 | `Sql4CdsConnectionFactory` | ✅ Built |
 | `MetadataSnapshot` / `SnapshotMetadataCache` / `MetadataCapture` | ✅ Built, 12 tests |
 | `dvduck doctor` / `dvduck capture` CLI | ✅ Built, 25 tests |
-| `DataverseSchemaMapper` (reader → DDL) | ✅ Built, 26 tests |
+| `DataverseSchemaMapper` (reader → DDL) | ✅ Built, 31 tests |
 | `DuckDbBulkLoader` (reader → Appender) | ✅ Built, 10 tests |
 | `ExecutionPlanAnalyzer` (folding guard) | ✅ Built, 27 tests |
 | `DataversePlanParser` (the `WITH` form) | ✅ Built, 28 tests |
@@ -80,7 +80,7 @@ debugging session to trace, so consumers are told at build time instead of at ru
 Requires .NET 10.
 
 ```bash
-dotnet test          # 229 tests, no tenant required
+dotnet test          # 234 tests, no tenant required
 ```
 
 ### Connect to a real environment
@@ -284,7 +284,7 @@ src/DataverseDuck/          Library
   Diagnostics/              Environment checks behind 'dvduck doctor'
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
-tests/DataverseDuck.Tests/  229 tests, no tenant required
+tests/DataverseDuck.Tests/  234 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/sql4cds-behaviour.md   Measured engine defaults and type mapping
