@@ -50,7 +50,7 @@ Working end to end against a real Dataverse environment.
 | `DataverseCache` / key-set pushdown | ✅ Built, 28 tests |
 | `.env` loading, `dvduck doctor` remedies | ✅ Built, 17 tests |
 | Named profiles / certificate credentials | ✅ Built, 31 tests; certificate path unverified live |
-| Device-code (interactive/MFA-capable) sign-in | ✅ Built, 5 tests; interactive flow unverified live |
+| Device-code (interactive/MFA-capable) sign-in | ✅ Built, 9 tests; interactive flow unverified live |
 | `dvduck repl` (fetch once, query many) | ✅ Built, 38 tests, verified live; key handling untested |
 | `DataverseThrottling` (429 explanation) | ✅ Built, 9 tests; could not be provoked live, see below |
 | `ServiceProtectionBudget` (limit headers) | ✅ Built, 13 tests, verified live |
@@ -147,11 +147,15 @@ certificate you just switched to.
 Set `DATAVERSE_AUTH_MODE=devicecode` instead to sign in interactively as yourself rather
 than as the application. This is the only mode where MFA applies at all: the secret and
 certificate flows have no user in them, so a tenant's MFA policy simply doesn't come up.
-Device-code prints a URL and short code — no browser or GUI is needed on the machine
-running `dvduck`, so it works the same in a container or over SSH as it does locally; you
-(or anyone) can complete the sign-in from any device with a browser. See
-[docs/environment-setup.md](docs/environment-setup.md#device-code-sign-in) for the app
-registration this needs (a public client, not a confidential one).
+No `DATAVERSE_CLIENT_ID` or app registration is required either — it defaults to
+Microsoft's own well-known public sample app, already registered in every tenant, so
+`DATAVERSE_URL` plus this one flag is enough to run. Device-code prints a URL and short
+code — no browser or GUI is needed on the machine running `dvduck`, so it works the same
+in a container or over SSH as it does locally; you (or anyone) can complete the sign-in
+from any device with a browser. `DATAVERSE_USERNAME` optionally picks which cached
+sign-in to reuse across runs. See
+[docs/environment-setup.md](docs/environment-setup.md#device-code-sign-in) for details,
+including using your own app registration where the well-known one isn't allowed.
 
 For more than one environment, prefix any variable with a profile name:
 
@@ -512,7 +516,7 @@ src/DataverseDuck/          Library
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
   Repl*.cs                  Interactive session, statement loop and terminal table
-tests/DataverseDuck.Tests/  402 tests, no tenant required
+tests/DataverseDuck.Tests/  406 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/large-tables.md        Measured limits, and where key-set pushdown stops paying

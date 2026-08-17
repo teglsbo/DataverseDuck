@@ -167,26 +167,20 @@ certificate you just switched to.
 Both of the above authenticate the *application*, with no user and therefore no MFA
 prompt possible even if the tenant requires it. If you want to run `dvduck` as yourself
 instead — for example to pick up whatever access and MFA policy your own account has,
-rather than provisioning a service principal at all — register a **public client** app
-instead of a confidential one:
-
-- Same **New registration** screen as above, but this time it needs no secret or
-  certificate at all.
-- Redirect URI: **Public client/native (mobile & desktop)**, value
-  `https://login.microsoftonline.com/common/oauth2/nativeclient`. This is the
-  well-known redirect used by device-code and other flows that have no browser to
-  redirect back to on this machine — MSAL requires *some* redirect URI be registered even
-  though device-code never actually navigates to it.
-- Under **Authentication**, enable **Allow public client flows**. Device-code is
-  refused with `AADSTS7000218` until this is turned on.
-
-Then set:
+without provisioning a service principal at all — set:
 
 ```bash
+export DATAVERSE_URL="https://yourorg.crm4.dynamics.com"
 export DATAVERSE_AUTH_MODE=devicecode
 ```
 
-with no `DATAVERSE_CLIENT_SECRET`, `DATAVERSE_CERT_PATH`, or `DATAVERSE_CERT_THUMBPRINT` —
+That's it — no `DATAVERSE_CLIENT_ID` and no app registration step. Leaving the client ID
+unset falls back to Microsoft's own well-known public sample application ID
+(`51f81489-12ee-4a9e-aaae-a2591f45987d`, the same one used in Microsoft's own connection-
+string documentation and by tools like XrmToolBox), which is already registered as a
+public client with a native redirect URI in every tenant.
+
+Set no `DATAVERSE_CLIENT_SECRET`, `DATAVERSE_CERT_PATH`, or `DATAVERSE_CERT_THUMBPRINT` —
 setting any of those alongside `DATAVERSE_AUTH_MODE` is refused for the same reason two
 credentials at once is refused. Running `dvduck` then prints something like:
 
@@ -201,8 +195,37 @@ asks for. This is why device-code works the same in a headless container or over
 it does on a desktop: no browser or GUI is ever needed on the machine running the CLI
 itself, only outbound HTTPS to `login.microsoftonline.com`.
 
+If more than one account has signed in on this machine before, `DATAVERSE_USERNAME` picks
+which cached sign-in to reuse rather than prompting again:
+
+```bash
+export DATAVERSE_USERNAME="you@yourorg.onmicrosoft.com"
+```
+
+This is not itself a credential — device-code proves identity by completing the sign-in,
+not by naming an account — it only disambiguates MSAL's local token cache.
+
 You will still need an **application user** for this identity in Dataverse (step 4 below)
 — a user account signing in does not itself grant Dataverse access; a security role does.
+
+#### Using your own app registration instead
+
+The well-known sample app is convenient, but it's Microsoft's, not yours — some tenants
+restrict which applications may authenticate at all, and in that case it won't be on the
+allow list. Register your own public client instead:
+
+- Same **New registration** screen as the client-secret/certificate flow above, but this
+  time it needs no secret or certificate at all.
+- Redirect URI: **Public client/native (mobile & desktop)**, value
+  `https://login.microsoftonline.com/common/oauth2/nativeclient`. This is the well-known
+  redirect used by device-code and other flows that have no browser to redirect back to on
+  this machine — MSAL requires *some* redirect URI be registered even though device-code
+  never actually navigates to it.
+- Under **Authentication**, enable **Allow public client flows**. Device-code is refused
+  with `AADSTS7000218` until this is turned on.
+
+Then set `DATAVERSE_CLIENT_ID` to that application's ID alongside `DATAVERSE_AUTH_MODE`,
+exactly as with client-secret or certificate auth.
 
 > Device-code sign-in is implemented and unit tested for its configuration-resolution
 > logic, but **the interactive flow itself has not been verified against a live tenant** —

@@ -241,11 +241,25 @@ public sealed class CertificateCredential(X509Certificate2 certificate, string s
 /// process lifetime via MSAL's own silent-token-first behaviour, so a session
 /// that acquires more than one token is not prompted twice.
 /// </summary>
-public sealed class DeviceCodeCredential(Func<DeviceCodeResult, Task>? onCodeReady = null) : DataverseCredential
+public sealed class DeviceCodeCredential(string? username = null, Func<DeviceCodeResult, Task>? onCodeReady = null)
+    : DataverseCredential
 {
     private IPublicClientApplication? _app;
 
-    public override string Describe() => "device-code (interactive sign-in, human user)";
+    /// <summary>
+    /// Optional. Device-code itself has no field for a username -- you type
+    /// whatever account you sign in with at the browser prompt -- so this is
+    /// used only to pick the right cached account across repeated runs when
+    /// more than one has signed in on this machine before. Never sent as, or
+    /// treated as, a credential -- device-code proves identity by completing
+    /// the sign-in, not by naming an account.
+    /// </summary>
+    public string? Username { get; } = string.IsNullOrWhiteSpace(username) ? null : username.Trim();
+
+    public override string Describe() =>
+        Username is null
+            ? "device-code (interactive sign-in, human user)"
+            : $"device-code (interactive sign-in, cached account={Username})";
 
     public override async Task<AuthenticationResult> AcquireTokenAsync(
         DataverseOptions options, CancellationToken cancellationToken)
@@ -253,7 +267,11 @@ public sealed class DeviceCodeCredential(Func<DeviceCodeResult, Task>? onCodeRea
         var app = GetOrBuildApp(options);
 
         var accounts = await app.GetAccountsAsync();
-        var existing = accounts.FirstOrDefault();
+        var existing = Username is null
+            ? accounts.FirstOrDefault()
+            : accounts.FirstOrDefault(a => string.Equals(a.Username, Username, StringComparison.OrdinalIgnoreCase))
+                ?? accounts.FirstOrDefault();
+
         if (existing is not null)
         {
             try

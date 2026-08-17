@@ -78,6 +78,14 @@ internal static class Program
                                        A certificate already in the platform store. On Linux
                                        that store is a per-user directory that nothing fills
                                        in by default, so prefer a file there.
+              DATAVERSE_AUTH_MODE=devicecode
+                                       Sign in interactively as yourself instead of as the
+                                       application -- the only mode MFA applies to. No
+                                       DATAVERSE_CLIENT_ID needed either: it defaults to
+                                       Microsoft's well-known public sample app. Prints a
+                                       URL and code; complete sign-in on any device with a
+                                       browser. DATAVERSE_USERNAME optionally picks which
+                                       cached sign-in to reuse.
 
             Profiles:
               Prefix any of the above with a profile name to address a second environment:

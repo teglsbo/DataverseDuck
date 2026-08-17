@@ -32,6 +32,14 @@ public sealed class DataverseOptions
 
     public const string DeviceCodeAuthMode = "devicecode";
 
+    /// <summary>
+    /// Optional login hint for device-code sign-in: pre-fills the account at
+    /// the sign-in prompt and disambiguates cached accounts on repeated runs.
+    /// Not a credential in itself -- device-code proves identity by
+    /// completing the sign-in, not by naming an account.
+    /// </summary>
+    public const string UsernameVariable = "DATAVERSE_USERNAME";
+
     /// <summary>Selects a profile when no name is passed explicitly.</summary>
     public const string ProfileVariable = "DATAVERSE_PROFILE";
 
@@ -161,6 +169,7 @@ public sealed class DataverseOptions
             Read(CertificatePasswordVariable),
             Read(CertificateThumbprintVariable),
             Read(AuthModeVariable),
+            Read(UsernameVariable),
             profile,
             out options,
             out error);
@@ -174,7 +183,7 @@ public sealed class DataverseOptions
     [
         UrlVariable, TenantIdVariable, ClientIdVariable, ClientSecretVariable,
         CertificatePathVariable, CertificatePasswordVariable, CertificateThumbprintVariable,
-        AuthModeVariable,
+        AuthModeVariable, UsernameVariable,
     ];
 
     private static bool ProfileExists(string normalized) =>
@@ -298,6 +307,16 @@ public sealed class DataverseOptions
         return true;
     }
 
+    /// <summary>
+    /// Microsoft's own published sample application ID for interactive/OAuth
+    /// scenarios (used in Microsoft's XRM tooling connection-string docs and
+    /// widely reused by tools like XrmToolBox). Pre-registered as a public
+    /// client with the native redirect URI in every tenant, which is what
+    /// lets device-code sign-in work with nothing more than a URL and a
+    /// username -- no app registration step of your own required.
+    /// </summary>
+    public const string WellKnownDeviceCodeClientId = "51f81489-12ee-4a9e-aaae-a2591f45987d";
+
     public static bool TryCreate(
         string? url,
         string? clientId,
@@ -305,7 +324,7 @@ public sealed class DataverseOptions
         string? tenantId,
         [NotNullWhen(true)] out DataverseOptions? options,
         [NotNullWhen(false)] out string? error) =>
-        TryCreate(url, clientId, clientSecret, tenantId, null, null, null, null, null, out options, out error);
+        TryCreate(url, clientId, clientSecret, tenantId, null, null, null, null, null, null, out options, out error);
 
     public static bool TryCreate(
         string? url,
@@ -316,6 +335,7 @@ public sealed class DataverseOptions
         string? certificatePassword,
         string? certificateThumbprint,
         string? authMode,
+        string? username,
         string? profile,
         [NotNullWhen(true)] out DataverseOptions? options,
         [NotNullWhen(false)] out string? error)
@@ -323,6 +343,15 @@ public sealed class DataverseOptions
         options = null;
 
         string Named(string variable) => VariableName(variable, profile);
+
+        var isDeviceCode = string.Equals(authMode?.Trim(), DeviceCodeAuthMode, StringComparison.OrdinalIgnoreCase);
+
+        // Device-code is the one mode that can run with nothing but a URL:
+        // Microsoft's well-known sample client ID is already a registered
+        // public client in every tenant, so there is no app registration to
+        // create first.
+        if (isDeviceCode && string.IsNullOrWhiteSpace(clientId))
+            clientId = WellKnownDeviceCodeClientId;
 
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(url)) missing.Add(Named(UrlVariable));
@@ -355,7 +384,7 @@ public sealed class DataverseOptions
         }
 
         if (!TryResolveCredential(
-                clientSecret, certificatePath, certificatePassword, certificateThumbprint, authMode,
+                clientSecret, certificatePath, certificatePassword, certificateThumbprint, authMode, username,
                 profile, out var credential, out error))
             return false;
 
@@ -389,6 +418,7 @@ public sealed class DataverseOptions
         string? certificatePassword,
         string? certificateThumbprint,
         string? authMode,
+        string? username,
         string? profile,
         [NotNullWhen(true)] out DataverseCredential? credential,
         [NotNullWhen(false)] out string? error)
@@ -404,6 +434,13 @@ public sealed class DataverseOptions
             error = $"{Named(AuthModeVariable)}='{authMode}' is not recognized. The only supported " +
                     $"value is '{DeviceCodeAuthMode}'; leave it unset to authenticate with a secret " +
                     "or certificate instead.";
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(username) && !isDeviceCode)
+        {
+            error = $"{Named(UsernameVariable)} only applies to device-code sign-in. Set " +
+                    $"{Named(AuthModeVariable)}={DeviceCodeAuthMode} to use it, or unset it.";
             return false;
         }
 
@@ -431,7 +468,7 @@ public sealed class DataverseOptions
 
         if (isDeviceCode)
         {
-            credential = new DeviceCodeCredential();
+            credential = new DeviceCodeCredential(username);
             error = null;
             return true;
         }
