@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <Version>0.1.0</Version>
-    <Authors>dataverse-duck contributors</Authors>
+    <Authors>DataverseDuck contributors</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>dataverse;dynamics365;duckdb;sql;powerplatform</PackageTags>

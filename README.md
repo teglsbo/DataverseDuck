@@ -1,4 +1,4 @@
-# dataverse-duck
+# DataverseDuck
 
 Query Microsoft Dataverse tables and local JSON logs/state in a single SQL statement,
 from C#, using [DuckDB](https://duckdb.org) and [SQL 4 CDS](https://github.com/MarkMpn/Sql4Cds).
@@ -62,9 +62,6 @@ Working end to end against a real Dataverse environment.
       unit tested against a generated certificate, but this project's tenant
       authenticates with a secret, so the SDK's certificate constructor has never
       actually run against Dataverse.
-- [ ] **Settle the name.** The repository is `dataverse-duck`, the tool is `dvduck`, the
-      packages are `DataverseDuck` and `DataverseDuck.Cli`. `PackageId` and
-      `ToolCommandName` are hard to change after a first release.
 - [ ] **Exercise the interactive REPL by hand.** The piped path is covered live, completion
       is driven in tests through PrettyPrompt's own `IPromptCallbacks`, and the renderer
       degrades to line reading when a terminal reports no size. What remains untested is
