@@ -85,8 +85,13 @@ Working end to end against a real Dataverse environment.
       splitting the query into `createdon` date ranges under 50,000 rows each and summing
       client-side, silently. The limit is real and enforced per partition; see
       [docs/large-tables.md](docs/large-tables.md#explained-count-returning-more-than-50000).
-- [ ] **Unexplained: a trailing newline flips `read_json_auto` type inference**
-      (ADR 0002, measurement 9).
+- [x] **Explained: a trailing newline flips `read_json_auto` type inference**
+      (ADR 0002, measurement 9). Reproduced against DuckDB's own sniffing code: with a
+      2-row file mixing timestamp shapes, the newline shifts where DuckDB's read buffer
+      splits during sampling, changing the order candidate types get eliminated in. Add
+      a 3rd row and both variants already agree on `VARCHAR` regardless of newline — it's
+      a narrow boundary condition, not a bug to fix. Inference still isn't safe to rely
+      on either way, which is exactly what ADR 0005's runtime detector already assumes.
 
 ## Installing
 

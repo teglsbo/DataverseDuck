@@ -74,6 +74,36 @@ All from `spikes/TimezoneSpike`, run on DuckDB 1.5.5 via DuckDB.NET 1.5.5.
    `read_json_auto(path, columns = {ts: 'VARCHAR'})` and casting through `TIMESTAMPTZ`
    is correct under every session timezone and both file variants (verified).
 
+   **Addendum (2026-08-18) — the mechanism, found.** Reproduced directly against
+   DuckDB 1.5.5's own source (`extension/json/json_reader.cpp`,
+   `json_functions/json_structure.cpp`). `read_json_auto` samples the file in
+   `STANDARD_VECTOR_SIZE`-row (2048) buffer batches and narrows a per-column
+   "candidate type" list (`RefineCandidateTypesString` /
+   `JSONStructureNode::EliminateCandidateTypes`) as more sampled values are seen;
+   the final type is whatever's left in the list once sampling stops — if every
+   candidate is eliminated, VARCHAR is what remains. It is a moving boundary
+   condition in that elimination, not something that depends on any single row's
+   content:
+
+   | rows in the file | no trailing newline | one trailing newline |
+   |---|---|---|
+   | 1 | `TIMESTAMP` | `TIMESTAMP` |
+   | 2 (one `Z`, one `+02:00`) | `TIMESTAMP` | `VARCHAR` |
+   | 3+ | `VARCHAR` | `VARCHAR` |
+
+   So the trailing newline only matters at the exact n=2 boundary this project's
+   spike happened to test; add a third row and both variants already agree on
+   `VARCHAR` regardless of newline. The newline changes where DuckDB's internal
+   read buffer is split relative to the two JSON objects during that one sampling
+   pass, which is enough to change the order candidate types are eliminated in —
+   but the destination (VARCHAR, once mixed offset shapes are present at all) is
+   the same either way for any realistic file. This is a DuckDB engine sniffing
+   quirk, not a bug in this project's code, and there is nothing here to fix:
+   it only reinforces that inference must not be trusted, which is exactly what
+   ADR 0005's runtime detector (`JsonTimestampInspector`) already assumes and
+   guards — it flags any textual column that still looks like a timestamp after
+   `read_json_auto`, regardless of *why* inference failed.
+
 ## Decision
 
 **Every timestamp in the cache is a naive DuckDB `TIMESTAMP` whose value is UTC.
