@@ -128,11 +128,26 @@ internal sealed class ReplLoop(ReplSession session)
         return true;
     }
 
-    private async Task<int> InteractiveAsync(CancellationToken cancellationToken)
+    private Task<int> InteractiveAsync(CancellationToken cancellationToken) =>
+        RunInteractiveAsync(new SystemConsole(), HistoryFile(), cancellationToken);
+
+    /// <summary>
+    /// The actual PrettyPrompt-driven loop, with the console and history
+    /// location as parameters rather than hard-coded. Tests drive this
+    /// directly with a scripted <see cref="IConsole"/> and a throwaway
+    /// history file, exercising the real <see cref="Prompt"/> and
+    /// <see cref="Completions"/> wiring instead of only the pieces
+    /// extracted for unit testing (<see cref="Accumulate"/> and friends).
+    /// </summary>
+    internal async Task<int> RunInteractiveAsync(
+        IConsole console,
+        string historyFilepath,
+        CancellationToken cancellationToken)
     {
         await using var prompt = new Prompt(
-            persistentHistoryFilepath: HistoryFile(),
+            persistentHistoryFilepath: historyFilepath,
             callbacks: new Completions(session),
+            console: console,
             configuration: new PromptConfiguration(
                 prompt: new FormattedString("dvduck> ", new FormatSpan(0, 7, AnsiColor.Green))));
 

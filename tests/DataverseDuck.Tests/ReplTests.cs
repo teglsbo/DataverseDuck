@@ -434,3 +434,173 @@ public class ReplCompletionTests : IDisposable
         Assert.Equal(expected, actual);
     }
 }
+
+/// <summary>
+/// Everything above exercises pieces of the REPL pulled out into testable
+/// functions. That leaves the wiring itself unverified: does pressing Tab
+/// actually accept a completion, does Enter actually submit and print a
+/// result, does history actually come back on an arrow key? A hand test in a
+/// real terminal answered that once (see README); these pin it down so it
+/// stays answered.
+///
+/// <see cref="ScriptedConsole"/> stands in for the terminal and
+/// <see cref="ReplLoop.RunInteractiveAsync"/> is driven directly, the same
+/// method the real CLI calls once it has decided a terminal is usable.
+/// </summary>
+public class ReplInteractiveTests : IDisposable
+{
+    private readonly DuckDBConnection _duck = new("Data Source=:memory:");
+    private readonly ReplSession _session;
+    private readonly string _historyFile;
+    private readonly TextWriter _originalOut = Console.Out;
+    private readonly TextWriter _originalError = Console.Error;
+
+    public ReplInteractiveTests()
+    {
+        _duck.Open();
+
+        using (var command = _duck.CreateCommand())
+        {
+            command.CommandText = "CREATE TABLE crm_contact (contactid UUID, fullname VARCHAR)";
+            command.ExecuteNonQuery();
+        }
+
+        _session = new ReplSession(_duck, () => null, FoldingPolicy.Warn, snapshot: null);
+        _historyFile = Path.Combine(Path.GetTempPath(), $"dvduck-test-history-{Guid.NewGuid():N}.txt");
+    }
+
+    public void Dispose()
+    {
+        Console.SetOut(_originalOut);
+        Console.SetError(_originalError);
+        _session.Dispose();
+        _duck.Dispose();
+
+        if (File.Exists(_historyFile))
+            File.Delete(_historyFile);
+
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Runs the loop against a script until it runs out of keys, then returns
+    /// whatever <see cref="ReplSession"/> printed. Running out of keys is the
+    /// expected, successful end of a scripted session -- see
+    /// <see cref="ScriptExhaustedException"/> -- so it is swallowed here
+    /// rather than left for every test to catch.
+    /// </summary>
+    private async Task<string> Run(ScriptedConsole console, string? historyFile = null)
+    {
+        var output = new StringWriter();
+        Console.SetOut(output);
+        Console.SetError(output);
+
+        var loop = new ReplLoop(_session);
+
+        try
+        {
+            await loop.RunInteractiveAsync(console, historyFile ?? _historyFile, default);
+        }
+        catch (ScriptExhaustedException)
+        {
+            // Expected: the script ran out of keys, same as Ctrl-D would.
+        }
+
+        return output.ToString();
+    }
+
+    [Fact]
+    public async Task EnterSubmitsAStatementAndPrintsItsResult()
+    {
+        var console = new ScriptedConsole().Type("SELECT 1 AS answer;").Enter();
+
+        var output = await Run(console);
+
+        Assert.Contains("answer", output);
+        Assert.Contains("1", output);
+    }
+
+    [Fact]
+    public async Task EnterSubmitsAStatementAndPrintsAnError()
+    {
+        var console = new ScriptedConsole().Type("SELECT this is not sql;").Enter();
+
+        var output = await Run(console);
+
+        Assert.Contains("Error", output);
+    }
+
+    /// <summary>
+    /// Types a table name that only matches once Tab has accepted a
+    /// completion partway through, so the test fails if Tab stops doing
+    /// anything -- the completion popup rendering was already covered by
+    /// hand; this covers accepting one.
+    /// </summary>
+    [Fact]
+    public async Task TabAcceptsACompletion()
+    {
+        var console = new ScriptedConsole()
+            .Type("SELECT * FROM crm_cont")
+            .Tab()
+            .Type(";")
+            .Enter();
+
+        var output = await Run(console);
+
+        Assert.DoesNotContain("Error", output);
+        Assert.DoesNotContain("No table", output);
+    }
+
+    /// <summary>
+    /// A statement with no trailing ';' does not submit -- Accumulate's job,
+    /// already covered directly by <see cref="ReplAccumulateTests"/> -- but
+    /// this confirms the real loop actually calls it: two Enters with the
+    /// semicolon on the second line must still run as one statement.
+    /// </summary>
+    [Fact]
+    public async Task AStatementCanSpanMultipleLinesBeforeItsSemicolon()
+    {
+        var console = new ScriptedConsole()
+            .Type("SELECT 1 AS x")
+            .Escape()
+            .Enter()
+            .Type("FROM (SELECT 1 AS x) t;")
+            .Enter();
+
+        var output = await Run(console);
+
+        Assert.Contains("x", output);
+        Assert.DoesNotContain("Error", output);
+    }
+
+    /// <summary>
+    /// History is what makes a REPL worth using twice. A statement submitted
+    /// in one session should come back on an Up arrow in the next one, since
+    /// that is the whole point of persisting it to a file rather than
+    /// keeping it only in memory.
+    /// </summary>
+    [Fact]
+    public async Task APreviousStatementComesBackOnUpArrow()
+    {
+        var historyFile = Path.Combine(Path.GetTempPath(), $"dvduck-test-history-{Guid.NewGuid():N}.txt");
+
+        try
+        {
+            var first = new ScriptedConsole().Type("SELECT 1 AS x;").Enter();
+            await Run(first, historyFile);
+
+            // A fresh loop and console, same history file: nothing but the
+            // arrow key connects this session to the one before it.
+            var second = new ScriptedConsole().UpArrow().ControlC();
+            await Run(second, historyFile);
+
+            Assert.Contains("SELECT 1 AS x;", second.Rendered);
+        }
+        finally
+        {
+            if (File.Exists(historyFile))
+                File.Delete(historyFile);
+        }
+    }
+}
+
