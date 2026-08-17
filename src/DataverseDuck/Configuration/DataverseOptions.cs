@@ -122,6 +122,37 @@ public sealed class DataverseOptions
     public static bool TryLoadFromEnvironment(
         string? profile,
         [NotNullWhen(true)] out DataverseOptions? options,
+        [NotNullWhen(false)] out string? error) =>
+        TryLoadFromEnvironment(profile, overrides: default, out options, out error);
+
+    /// <summary>
+    /// Values supplied on the command line, taking precedence over whatever
+    /// the environment (profiled or not) says for the same setting. Every
+    /// field is optional -- only what the caller actually passed a flag for
+    /// is set -- so a CLI invocation can override just the one thing it
+    /// cares about (say, trying a different environment for one query) while
+    /// everything else still comes from `.env`.
+    /// </summary>
+    public readonly record struct EnvironmentOverrides(
+        string? Url = null,
+        string? ClientId = null,
+        string? TenantId = null,
+        string? ClientSecret = null,
+        string? CertificatePath = null,
+        string? CertificatePassword = null,
+        string? CertificateThumbprint = null,
+        string? AuthMode = null,
+        string? Username = null);
+
+    /// <summary>
+    /// As <see cref="TryLoadFromEnvironment(string?, out DataverseOptions?, out string?)"/>,
+    /// but letting explicit command-line values win over whatever the
+    /// environment supplies for the same setting.
+    /// </summary>
+    public static bool TryLoadFromEnvironment(
+        string? profile,
+        EnvironmentOverrides overrides,
+        [NotNullWhen(true)] out DataverseOptions? options,
         [NotNullWhen(false)] out string? error)
     {
         options = null;
@@ -161,15 +192,15 @@ public sealed class DataverseOptions
         string? Read(string variable) => ReadForProfile(variable, profile);
 
         return TryCreate(
-            Read(UrlVariable),
-            Read(ClientIdVariable),
-            Read(ClientSecretVariable),
-            Read(TenantIdVariable),
-            Read(CertificatePathVariable),
-            Read(CertificatePasswordVariable),
-            Read(CertificateThumbprintVariable),
-            Read(AuthModeVariable),
-            Read(UsernameVariable),
+            overrides.Url ?? Read(UrlVariable),
+            overrides.ClientId ?? Read(ClientIdVariable),
+            overrides.ClientSecret ?? Read(ClientSecretVariable),
+            overrides.TenantId ?? Read(TenantIdVariable),
+            overrides.CertificatePath ?? Read(CertificatePathVariable),
+            overrides.CertificatePassword ?? Read(CertificatePasswordVariable),
+            overrides.CertificateThumbprint ?? Read(CertificateThumbprintVariable),
+            overrides.AuthMode ?? Read(AuthModeVariable),
+            overrides.Username ?? Read(UsernameVariable),
             profile,
             out options,
             out error);

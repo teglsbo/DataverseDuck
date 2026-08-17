@@ -308,6 +308,21 @@ registrations, set `DATAVERSE_PROD_CLIENT_ID` and `DATAVERSE_PROD_CLIENT_SECRET`
 case-insensitive and hyphens become underscores, so `--profile west-eu` reads
 `DATAVERSE_WEST_EU_URL`.
 
+### Command-line overrides
+
+`--url`, `--client-id`, `--tenant-id`, `--auth-mode`, and `--username` override the
+corresponding variable (of whichever profile is selected) for a single run, without
+touching the environment:
+
+```bash
+dvduck doctor --profile prod --url https://yourorg-test.crm4.dynamics.com
+```
+
+There is no `--client-secret` or certificate equivalent: typing a secret on the command
+line puts it in shell history and in `ps` for anyone else on the machine to read. Keep
+those in the environment or `.env`, where a shell restart doesn't leave them lying around.
+
+
 The fallback stops short of one thing: a profile with no variables of its own is an error,
 not a profile that inherits everything. Without that rule a mistyped name would quietly
 give you the default environment, and the command would then succeed against the wrong

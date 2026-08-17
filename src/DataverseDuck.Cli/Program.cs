@@ -36,6 +36,12 @@ internal static class Program
             return 2;
         }
 
+        if (!TryTakeConnectionOverrides(ref args, out var overridesError))
+        {
+            Console.Error.WriteLine(overridesError);
+            return 2;
+        }
+
         return command switch
         {
             "doctor" => await DoctorAsync(args.Skip(1).ToArray()),
@@ -96,7 +102,18 @@ internal static class Program
 
             Options:
               --profile <name>         Use the variables prefixed with that name.
+              --url <url>              Overrides DATAVERSE_URL for this run.
+              --client-id <guid>       Overrides DATAVERSE_CLIENT_ID for this run.
+              --tenant-id <guid>       Overrides DATAVERSE_TENANT_ID for this run.
+              --auth-mode <mode>       Overrides DATAVERSE_AUTH_MODE for this run (only
+                                       'devicecode' is recognized).
+              --username <name>        Overrides DATAVERSE_USERNAME for this run
+                                       (device-code only).
               --out <path>             Snapshot path for 'capture'. Default: metadata/snapshot.bin
+
+              A client secret or certificate is deliberately not accepted this way -- typing
+              one on the command line puts it in shell history and in `ps`. Set those with
+              an environment variable or .env instead.
 
             Options for 'query':
               --query <sql>            A WITH block naming its own sources and the query, in
@@ -238,7 +255,7 @@ internal static class Program
 
     private static bool TryLoadOptions(out DataverseOptions options)
     {
-        if (DataverseOptions.TryLoadFromEnvironment(Profile, out var loaded, out var error))
+        if (DataverseOptions.TryLoadFromEnvironment(Profile, Overrides, out var loaded, out var error))
         {
             options = loaded;
             return true;
@@ -271,6 +288,13 @@ internal static class Program
     /// variables, or whatever DATAVERSE_PROFILE says.
     /// </summary>
     private static string? Profile;
+
+    /// <summary>
+    /// Connection settings named on the command line, taking precedence over
+    /// the environment for the same setting. Populated by
+    /// <see cref="TryTakeConnectionOverrides"/> before any subcommand runs.
+    /// </summary>
+    private static DataverseOptions.EnvironmentOverrides Overrides;
 
     private static async Task<int> ReplAsync(string[] args)
     {
@@ -358,6 +382,74 @@ internal static class Program
 
             Profile = args[++i];
         }
+
+        args = [.. kept];
+        return true;
+    }
+
+    /// <summary>
+    /// Removes '--url', '--client-id', '--tenant-id', '--auth-mode' and
+    /// '--username' from anywhere in the argument list, the same way
+    /// <see cref="TryTakeProfile"/> does for '--profile' -- so every
+    /// subcommand gets them without its own parser knowing about them.
+    ///
+    /// Deliberately does not cover '--client-secret' or the certificate
+    /// flags: a secret typed on the command line lands in shell history and
+    /// in `ps`, which is exactly the mundane leak
+    /// docs/environment-setup.md warns about for the secret itself. Those
+    /// stay environment/.env-only; only settings that are not sensitive on
+    /// their own (a URL, a client ID, an auth mode, a username) are accepted
+    /// here.
+    /// </summary>
+    private static bool TryTakeConnectionOverrides(ref string[] args, out string? error)
+    {
+        error = null;
+        var kept = new List<string>(args.Length);
+
+        string? url = null, clientId = null, tenantId = null, authMode = null, username = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var (flag, target) = args[i].ToLowerInvariant() switch
+            {
+                "--url" => ("--url", 0),
+                "--client-id" => ("--client-id", 1),
+                "--tenant-id" => ("--tenant-id", 2),
+                "--auth-mode" => ("--auth-mode", 3),
+                "--username" => ("--username", 4),
+                _ => (null, -1),
+            };
+
+            if (flag is null)
+            {
+                kept.Add(args[i]);
+                continue;
+            }
+
+            if (i + 1 >= args.Length)
+            {
+                error = $"{flag} needs a value, for example '{flag} " +
+                        (target == 0 ? "https://yourorg.crm4.dynamics.com'." : "...'.");
+                return false;
+            }
+
+            var value = args[++i];
+            switch (target)
+            {
+                case 0: url = value; break;
+                case 1: clientId = value; break;
+                case 2: tenantId = value; break;
+                case 3: authMode = value; break;
+                case 4: username = value; break;
+            }
+        }
+
+        Overrides = new DataverseOptions.EnvironmentOverrides(
+            Url: url,
+            ClientId: clientId,
+            TenantId: tenantId,
+            AuthMode: authMode,
+            Username: username);
 
         args = [.. kept];
         return true;

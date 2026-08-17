@@ -170,6 +170,10 @@ rejected rather than silently resolved to the default environment, so a mistyped
 fails instead of quietly querying the wrong tenant; the error lists the profiles that do
 exist.
 
+`--url`, `--client-id`, `--tenant-id`, `--auth-mode`, and `--username` override the
+matching variable for a single run instead of setting it in the environment. There's no
+`--client-secret` flag on purpose -- that belongs in `.env`, not shell history.
+
 ### Ask a question
 
 A query names its own sources in one `WITH` block. How many contacts had webchat messages:

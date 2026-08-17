@@ -71,6 +71,64 @@ public class ProfileTests : IDisposable
     }
 
     [Fact]
+    public void A_command_line_url_override_wins_over_the_environment()
+    {
+        Set(DataverseOptions.UrlVariable, "https://default.crm4.dynamics.com");
+        Set(DataverseOptions.ClientIdVariable, ValidClientId);
+        Set(DataverseOptions.ClientSecretVariable, "secret");
+
+        var overrides = new DataverseOptions.EnvironmentOverrides(Url: "https://cli.crm4.dynamics.com");
+
+        Assert.True(DataverseOptions.TryLoadFromEnvironment(null, overrides, out var options, out var error));
+
+        Assert.Null(error);
+        Assert.Equal("https://cli.crm4.dynamics.com/", options.EnvironmentUrl.ToString());
+    }
+
+    [Fact]
+    public void A_command_line_client_id_override_wins_over_the_environment()
+    {
+        Set(DataverseOptions.UrlVariable, "https://default.crm4.dynamics.com");
+        Set(DataverseOptions.ClientIdVariable, ValidClientId);
+        Set(DataverseOptions.ClientSecretVariable, "secret");
+
+        var overrides = new DataverseOptions.EnvironmentOverrides(ClientId: OtherClientId);
+
+        Assert.True(DataverseOptions.TryLoadFromEnvironment(null, overrides, out var options, out var error));
+
+        Assert.Null(error);
+        Assert.Contains(OtherClientId, options.Describe());
+    }
+
+    [Fact]
+    public void Overrides_still_apply_within_a_profile()
+    {
+        Set("DATAVERSE_PROD_URL", "https://prod.crm4.dynamics.com");
+        Set("DATAVERSE_PROD_CLIENT_ID", ValidClientId);
+        Set("DATAVERSE_PROD_CLIENT_SECRET", "secret");
+
+        var overrides = new DataverseOptions.EnvironmentOverrides(Url: "https://cli.crm4.dynamics.com");
+
+        Assert.True(DataverseOptions.TryLoadFromEnvironment("prod", overrides, out var options, out var error));
+
+        Assert.Null(error);
+        Assert.Equal("https://cli.crm4.dynamics.com/", options.EnvironmentUrl.ToString());
+    }
+
+    [Fact]
+    public void An_auth_mode_override_selects_device_code()
+    {
+        Set(DataverseOptions.UrlVariable, "https://default.crm4.dynamics.com");
+
+        var overrides = new DataverseOptions.EnvironmentOverrides(AuthMode: DataverseOptions.DeviceCodeAuthMode);
+
+        Assert.True(DataverseOptions.TryLoadFromEnvironment(null, overrides, out var options, out var error));
+
+        Assert.Null(error);
+        Assert.Contains("device", options.Describe(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void A_profile_reads_its_own_prefixed_variables()
     {
         Set(DataverseOptions.UrlVariable, "https://default.crm4.dynamics.com");
