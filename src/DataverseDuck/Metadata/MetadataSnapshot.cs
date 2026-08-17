@@ -20,6 +20,7 @@ public sealed class MetadataSnapshot
 {
     private readonly Dictionary<string, EntityMetadata> _entities;
 
+    /// <summary>Initialises the snapshot from a collection of captured entity metadata.</summary>
     /// <param name="entities">Metadata to include. Must have unique logical names.</param>
     public MetadataSnapshot(IEnumerable<EntityMetadata> entities)
     {

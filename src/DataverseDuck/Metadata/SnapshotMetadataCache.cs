@@ -24,6 +24,7 @@ public sealed class SnapshotMetadataCache : IAttributeMetadataCache
     /// </summary>
     private const int UnknownEntityErrorCode = -1;
 
+    /// <summary>Initialises the cache from a snapshot, optionally specifying recycle-bin-capable entities.</summary>
     /// <param name="snapshot">The captured metadata to serve.</param>
     /// <param name="recycleBinEntities">Entity logical names that support the recycle bin. Pass null for none.</param>
     public SnapshotMetadataCache(MetadataSnapshot snapshot, string[]? recycleBinEntities = null)
