@@ -17,7 +17,7 @@ The tables are `metadata.entity`, `metadata.attribute`, `metadata.relationship_1
 ## 1. How many tables are there?
 
 ```console
-$ dvduck query --plan "
+$ dvduck query --query "
     WITH e AS DATAVERSE (SELECT logicalname FROM metadata.entity)
     SELECT count(*) AS tables FROM e"
   e: 872 rows in 0.3s
@@ -31,7 +31,7 @@ there somewhere, which is why the next query matters more than this one.
 ## 2. Find a table by name
 
 ```console
-$ dvduck query --plan "
+$ dvduck query --query "
     WITH e AS DATAVERSE (SELECT logicalname, displayname FROM metadata.entity
                          WHERE logicalname LIKE '%account%')
     SELECT logicalname, displayname FROM e ORDER BY logicalname"
@@ -54,7 +54,7 @@ something much more expensive, which is why it is never silenced.
 ## 3. What columns does a table have?
 
 ```console
-$ dvduck query --plan "
+$ dvduck query --query "
     WITH a AS DATAVERSE (SELECT logicalname, attributetypename, requiredlevel
                          FROM metadata.attribute WHERE entitylogicalname = 'contact')
     SELECT * FROM a ORDER BY logicalname LIMIT 8"
@@ -78,7 +78,7 @@ against `SELECT *`: most of those columns are derived. Note the pattern above �
 ## 4. Which columns are lookups, and what do they point at?
 
 ```console
-$ dvduck query --plan "
+$ dvduck query --query "
     WITH a AS DATAVERSE (SELECT logicalname, targets, attributetype
                          FROM metadata.attribute
                          WHERE entitylogicalname = 'contact' AND attributetype = 'Lookup')
@@ -101,7 +101,7 @@ right table. `masterid` pointing back at `contact` is a self-reference — merge
 ## 5. Which datetime columns are wall-clock rather than instants?
 
 ```console
-$ dvduck query --plan "
+$ dvduck query --query "
     WITH a AS DATAVERSE (SELECT entitylogicalname, logicalname, datetimebehavior, format
                          FROM metadata.attribute
                          WHERE entitylogicalname IN ('account','contact')
@@ -125,7 +125,7 @@ Do not key off `format` instead — it looks equivalent and is not. Stock
 ## 6. Join entity to attribute — the widest custom tables
 
 ```console
-$ dvduck query --plan "
+$ dvduck query --query "
     WITH e AS DATAVERSE (SELECT logicalname, iscustomentity FROM metadata.entity),
          a AS DATAVERSE (SELECT entitylogicalname FROM metadata.attribute
                          WHERE entitylogicalname IN {{SELECT logicalname FROM e
@@ -153,7 +153,7 @@ two-hop pattern used for data.
 ## 7. Export the schema as JSON
 
 ```console
-$ dvduck query --plan "
+$ dvduck query --query "
     WITH columns AS DATAVERSE (SELECT entitylogicalname, logicalname, attributetypename
                                FROM metadata.attribute WHERE entitylogicalname = 'contact')
     COPY (SELECT * FROM columns ORDER BY logicalname)

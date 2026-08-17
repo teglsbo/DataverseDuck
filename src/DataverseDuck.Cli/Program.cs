@@ -91,9 +91,11 @@ internal static class Program
               --out <path>             Snapshot path for 'capture'. Default: metadata/snapshot.bin
 
             Options for 'query':
-              --plan <sql>             A WITH block naming its own sources and the query, in
-                                       one statement.
-              --plan-file <path>       Read that plan from a file instead.
+              --query <sql>            A WITH block naming its own sources and the query, in
+                                       one statement. Runs it -- despite the name, this is
+                                       not a dry run. (--plan still accepted.)
+              --query-file <path>      Read that query from a file instead. (--plan-file
+                                       still accepted.)
               --db <path>              DuckDB file. Default: in-memory.
               --bom                    Prefix the output with a UTF-8 byte order mark.
                                        Excel on non-English Windows needs it to read
@@ -105,7 +107,7 @@ internal static class Program
                                        inside Dataverse. Default: warn but continue.
 
             Example -- how many contacts had webchat messages:
-              dvduck query --plan "
+              dvduck query --query "
                 WITH logs AS JSON ('webchat/*.json'),
                      crm_contact AS DATAVERSE (
                          SELECT contactid, fullname FROM contact
@@ -536,7 +538,7 @@ internal static class Program
 
         for (var i = 0; i < args.Length; i++)
         {
-            var needsValue = args[i] is "--db" or "--plan" or "--plan-file" or "--format";
+            var needsValue = args[i] is "--db" or "--query" or "--query-file" or "--plan" or "--plan-file" or "--format";
 
             if (needsValue && i + 1 >= args.Length)
             {
@@ -550,9 +552,9 @@ internal static class Program
                 case "--json":
                 case "--run":
                     Console.Error.WriteLine(
-                        $"{args[i]} was removed. A query now names its own sources in one --plan:");
+                        $"{args[i]} was removed. A query now names its own sources in one --query:");
                     Console.Error.WriteLine();
-                    Console.Error.WriteLine("  dvduck query --plan \"");
+                    Console.Error.WriteLine("  dvduck query --query \"");
                     Console.Error.WriteLine("    WITH logs AS JSON ('webchat/*.json'),");
                     Console.Error.WriteLine("         crm_contact AS DATAVERSE (SELECT ... WHERE id IN {{SELECT ... FROM logs}})");
                     Console.Error.WriteLine("    SELECT ...\"");
@@ -561,19 +563,30 @@ internal static class Program
                     return 2;
 
                 case "--plan":
+                    Console.Error.WriteLine("--plan is now --query -- it runs the statement, it does not just plan it. Still accepted.");
+                    plan = args[++i];
+                    break;
+
+                case "--query":
                     plan = args[++i];
                     break;
 
                 case "--plan-file":
+                case "--query-file":
+                {
+                    if (args[i] == "--plan-file")
+                        Console.Error.WriteLine("--plan-file is now --query-file. Still accepted.");
+
                     var planPath = args[++i];
                     if (!File.Exists(planPath))
                     {
-                        Console.Error.WriteLine($"No plan file at '{planPath}'.");
+                        Console.Error.WriteLine($"No query file at '{planPath}'.");
                         return 2;
                     }
 
                     plan = File.ReadAllText(planPath);
                     break;
+                }
 
                 case "--db":
                     database = args[++i];
@@ -612,7 +625,7 @@ internal static class Program
 
         if (plan is null)
         {
-            Console.Error.WriteLine("Nothing to run. Pass --plan \"WITH ...\" or --plan-file <path>.");
+            Console.Error.WriteLine("Nothing to run. Pass --query \"WITH ...\" or --query-file <path>.");
             return 2;
         }
 

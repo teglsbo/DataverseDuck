@@ -128,3 +128,15 @@ writes down and the parser checks.
 - `grep -c "in_out\|table_in_out" duckdb.h` → 0; the C API has no table-in-out
   functions, so a CTE cannot feed a table function.
 - ADR 0006 for `{{ }}`, ADR 0007 for why pushdown is not automatic.
+
+## Addendum (2026-08-17): `--plan` renamed to `--query`
+
+The flag was named after the internal type it builds (`PlanStep`/`PlanAnalysis`), which
+reads like a dry run — "show me the plan" — to anyone who has not read the source. It is
+not one: `--plan "SELECT ..."` fetches from Dataverse and executes, exactly as `--query`
+does now.
+
+`--query` and `--query-file` are the names going forward. `--plan` and `--plan-file` are
+still accepted — each prints a one-line deprecation notice to stderr and then behaves
+identically — so existing scripts keep working. Nothing else changes: this is a rename,
+not a new option.

@@ -147,7 +147,7 @@ exist.
 A query names its own sources in one `WITH` block. How many contacts had webchat messages:
 
 ```bash
-dvduck query --plan "
+dvduck query --query "
   WITH logs AS JSON ('webchat/*.json'),
        crm_contact AS DATAVERSE (
            SELECT contactid, fullname FROM contact
@@ -186,12 +186,15 @@ contacts. Ordinary CTEs may sit in the same `WITH`; they are left to DuckDB and 
 the final query, so a `{{ }}` cannot read them — the parser says so rather than letting it
 fail as "table not found".
 
-Use `--plan-file plan.sql` to keep the SQL in a file. `--db cache.duckdb` persists the
+Use `--query-file plan.sql` to keep the SQL in a file. `--db cache.duckdb` persists the
 fetched tables so a re-run costs nothing.
 
-`--plan` is the only form. An earlier `--json` / `--cache` / `--run` flag form was removed
-because it left the dependency order implicit in the order the flags happened to appear;
-those flags now print the equivalent plan rather than a bare "unknown option".
+`--query` is the only form. It runs the statement — the name says so now, rather than
+implying a dry run — but it was originally called `--plan` and is still accepted with a
+deprecation notice, alongside `--plan-file`. An earlier `--json` / `--cache` / `--run` flag
+form was removed entirely because it left the dependency order implicit in the order the
+flags happened to appear; those flags now print the equivalent query rather than a bare
+"unknown option".
 
 ### Ask about the schema
 
@@ -201,7 +204,7 @@ Dataverse metadata is queryable as ordinary tables — `metadata.entity`,
 cache into DuckDB like any other table and can be searched, joined and exported.
 
 ```bash
-dvduck query --db schema.duckdb --plan "
+dvduck query --db schema.duckdb --query "
   WITH columns AS DATAVERSE (SELECT entitylogicalname, logicalname, attributetypename
                              FROM metadata.attribute WHERE entitylogicalname = 'contact')
   COPY (SELECT * FROM columns ORDER BY logicalname)
@@ -295,7 +298,7 @@ All three escape their own delimiters, so a `description` containing a tab, a co
 newline cannot silently add a column or split a row:
 
 ```console
-$ dvduck query --format csv --plan "WITH d AS JSON ('nasty.json') SELECT * FROM d"
+$ dvduck query --format csv --query "WITH d AS JSON ('nasty.json') SELECT * FROM d"
 id,name,note
 1,"Acme, Inc","line one
 line two"
