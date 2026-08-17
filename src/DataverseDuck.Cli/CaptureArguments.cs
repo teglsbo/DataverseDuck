@@ -14,7 +14,9 @@ internal sealed record CaptureArguments
 {
     public const string DefaultPath = "metadata/snapshot.bin";
 
+    /// <summary>Entity logical names to capture metadata for.</summary>
     public required IReadOnlyList<string> Tables { get; init; }
+    /// <summary>Path to write the snapshot file to.</summary>
     public required string Path { get; init; }
 
     /// <summary>Parses <paramref name="args"/>, or returns false with a message to print.</summary>

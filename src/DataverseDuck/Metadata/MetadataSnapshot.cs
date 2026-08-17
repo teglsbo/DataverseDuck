@@ -20,6 +20,7 @@ public sealed class MetadataSnapshot
 {
     private readonly Dictionary<string, EntityMetadata> _entities;
 
+    /// <param name="entities">Metadata to include. Must have unique logical names.</param>
     public MetadataSnapshot(IEnumerable<EntityMetadata> entities)
     {
         ArgumentNullException.ThrowIfNull(entities);
@@ -29,8 +30,10 @@ public sealed class MetadataSnapshot
     /// <summary>Entity logical names contained in the snapshot.</summary>
     public IReadOnlyCollection<string> LogicalNames => _entities.Keys;
 
+    /// <summary>Full metadata objects for every captured entity.</summary>
     public IReadOnlyCollection<EntityMetadata> Entities => _entities.Values;
 
+    /// <summary>Looks up an entity by logical name. Returns false when the entity was not captured.</summary>
     public bool TryGet(string logicalName, out EntityMetadata metadata) =>
         _entities.TryGetValue(logicalName, out metadata!);
 
@@ -45,6 +48,10 @@ public sealed class MetadataSnapshot
             MaxItemsInObjectGraph = int.MaxValue,
         });
 
+    /// <summary>
+    /// Serializes the snapshot to a file at <paramref name="path"/>, creating
+    /// the directory if it does not exist.
+    /// </summary>
     public void Save(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -57,6 +64,7 @@ public sealed class MetadataSnapshot
         Save(stream);
     }
 
+    /// <summary>Serializes the snapshot to <paramref name="stream"/> in binary XML format.</summary>
     public void Save(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -66,6 +74,10 @@ public sealed class MetadataSnapshot
         writer.Flush();
     }
 
+    /// <summary>
+    /// Deserializes a snapshot from a file. Throws <see cref="FileNotFoundException"/> when
+    /// the file does not exist, with a message that says how to create one.
+    /// </summary>
     public static MetadataSnapshot Load(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -78,6 +90,7 @@ public sealed class MetadataSnapshot
         return Load(stream);
     }
 
+    /// <summary>Deserializes a snapshot from a binary XML <paramref name="stream"/>.</summary>
     public static MetadataSnapshot Load(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);

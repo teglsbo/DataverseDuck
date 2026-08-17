@@ -79,6 +79,7 @@ public sealed record PlanAnalysis(
     public IEnumerable<PlanFinding> Problems =>
         Findings.Where(f => f.Severity != PlanSeverity.Info);
 
+    /// <summary>True when at least one finding is severe enough to trigger <see cref="FoldingPolicy.RejectCritical"/>.</summary>
     public bool HasCritical => Findings.Any(f => f.Severity == PlanSeverity.Critical);
 
     /// <summary>A readable summary, suitable for logging.</summary>

@@ -35,6 +35,7 @@ public sealed class PlanNotFoldedException : Exception
         Analysis = analysis;
     }
 
+    /// <summary>The analysis that caused the exception, for structured inspection by callers.</summary>
     public PlanAnalysis Analysis { get; }
 
     private static string BuildMessage(PlanAnalysis analysis)

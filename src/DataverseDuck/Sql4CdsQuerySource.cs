@@ -20,6 +20,7 @@ public sealed class Sql4CdsQuerySource(
 
     private readonly ExecutionPlanAnalyzer _analyzer = analyzer ?? new ExecutionPlanAnalyzer();
 
+    /// <inheritdoc cref="IDataverseQuerySource.Analyze"/>
     public PlanAnalysis? Analyze(string sql)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sql);
@@ -45,6 +46,7 @@ public sealed class Sql4CdsQuerySource(
         return _analyzer.Analyze(command);
     }
 
+    /// <inheritdoc cref="IDataverseQuerySource.Query{T}"/>
     public T Query<T>(string sql, Func<DbDataReader, T> read)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sql);

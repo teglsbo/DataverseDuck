@@ -43,6 +43,10 @@ public static class ResultWriter
     private static readonly SearchValues<char> TsvSpecials = SearchValues.Create("\\\t\n\r");
     private static readonly SearchValues<char> CsvSpecials = SearchValues.Create(",\"\n\r");
 
+    /// <summary>
+    /// Parses a user-supplied format name case-insensitively. Returns false with a
+    /// message listing the valid names when the input is unrecognised.
+    /// </summary>
     public static bool TryParseFormat(string? text, out OutputFormat format, out string? error)
     {
         error = null;

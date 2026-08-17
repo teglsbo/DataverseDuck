@@ -11,8 +11,14 @@ namespace DataverseDuck.Cli;
 /// </summary>
 internal sealed record ReplArguments
 {
+    /// <summary>Path to the DuckDB file to open, or <c>:memory:</c> for an in-process database.</summary>
     public string Database { get; init; } = ":memory:";
+    /// <summary>
+    /// Optional path to a metadata snapshot. When supplied, queries compile
+    /// from the snapshot rather than a live connection.
+    /// </summary>
     public string? SnapshotPath { get; init; }
+    /// <summary>What to do when a query would not run entirely inside Dataverse.</summary>
     public FoldingPolicy Policy { get; init; } = FoldingPolicy.Warn;
 
     /// <summary>Parses <paramref name="args"/>, or returns false with a message to print.</summary>
