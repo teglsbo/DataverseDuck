@@ -4,6 +4,8 @@ using Microsoft.Xrm.Sdk;
 
 namespace DataverseDuck;
 
+using DataverseDuck.Metadata;
+
 /// <summary>
 /// Builds SQL 4 CDS connections with the settings this project requires.
 /// </summary>
@@ -66,6 +68,41 @@ public static class Sql4CdsConnectionFactory
                 client.LastException);
 
         return Create(client, applicationName, useTdsEndpoint);
+    }
+
+    /// <summary>
+    /// Creates a connection from a metadata snapshot alone, with no live
+    /// service. SQL 4 CDS can still compile and run SQL against tables that
+    /// were previously cached into <c>--db</c> and against any pure-local
+    /// (JSON) sources, using the snapshot to resolve column types and
+    /// relationships correctly (ADR 0002's datetime/lookup mapping needs
+    /// metadata to disambiguate a birthdate from an instant). Anything that
+    /// requires an actual Dataverse fetch -- a <c>DATAVERSE (...)</c> plan
+    /// step, or a <c>metadata.*</c> schema query -- fails, because there is no
+    /// tenant behind this connection. See ADR 0003.
+    /// </summary>
+    /// <param name="snapshot">Metadata captured earlier by <c>dvduck capture</c>.</param>
+    /// <param name="applicationName">Overrides <see cref="DefaultApplicationName"/>.</param>
+    public static Sql4CdsConnection CreateOffline(
+        SnapshotMetadataCache snapshot,
+        string? applicationName = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var dataSource = new DataSource(
+            new SnapshotOnlyOrganizationService(),
+            snapshot,
+            new SnapshotTableSizeCache(),
+            new SnapshotMessageCache())
+        {
+            Name = "snapshot",
+        };
+
+        var connection = new Sql4CdsConnection(
+            new Dictionary<string, DataSource>(StringComparer.OrdinalIgnoreCase) { [dataSource.Name] = dataSource });
+
+        Configure(connection, applicationName, useTdsEndpoint: false);
+        return connection;
     }
 
     private static void Configure(Sql4CdsConnection connection, string? applicationName, bool useTdsEndpoint)

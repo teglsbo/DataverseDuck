@@ -90,12 +90,12 @@ Round-trip fidelity is verified by tests covering private-setter properties
 - Snapshots go stale as schema changes. A re-capture command and a drift check are needed.
 - Snapshots may embed schema details about a customer environment. They are gitignored
   (`metadata/*.bin`) by default; treat them as potentially sensitive.
-- **The CLI can write a snapshot but cannot read one back.** `dvduck capture` produces the
-  file and `MetadataSnapshot.Load` consumes it, but `dvduck query` has no `--snapshot`
-  option, so the offline path this ADR exists to enable is reachable only from the library.
-  Note also that `metadata.*` schema queries fail against a snapshot regardless (ADR 0010
-  notes the engine calls the service for those), so a snapshot serves compilation, not
-  schema browsing.
+- **The CLI can write a snapshot but cannot read one back.** ~~`dvduck capture` produces
+  the file and `MetadataSnapshot.Load` consumes it, but `dvduck query` has no `--snapshot`
+  option, so the offline path this ADR exists to enable is reachable only from the
+  library.~~ Fixed; see the addendum below. Note also that `metadata.*` schema queries
+  fail against a snapshot regardless (ADR 0010 notes the engine calls the service for
+  those), so a snapshot serves compilation, not schema browsing.
 - Snapshots must be re-captured after schema changes; there is still no drift check.
 
 ## Verification against a real environment
@@ -123,3 +123,34 @@ reached a live run.
 ## Follow-ups
 - Add a `capture` CLI command and a staleness check.
 - Reconsider XrmMockup for simulating data and plugin behaviour once metadata is solved.
+
+## Addendum (2026-08-17): `dvduck query --snapshot` implemented
+
+The "cannot read one back" gap above is closed. `dvduck query --snapshot <path>` builds
+a `Sql4CdsConnection` from a `SnapshotMetadataCache` alone, with no live
+`IOrganizationService`. Three small stub types make this possible, promoted from the
+`spikes/MetadataSpike` reference implementation into `DataverseDuck.Metadata`:
+
+- `SnapshotOnlyOrganizationService` — throws `NotSupportedException` on every call except
+  the one SQL 4 CDS makes at connection start-up (an `organization` row, to read locale
+  and collation), which it fabricates.
+- `SnapshotTableSizeCache` — reports a fixed row count for every table. SQL 4 CDS only
+  uses this to weigh join order; it does not affect correctness.
+- `SnapshotMessageCache` — reports no custom messages. A snapshot captures entity
+  metadata, not the message catalogue, so custom actions are unavailable offline.
+
+Scope, confirmed with the maintainer before implementing: this is meant to let a query
+that only touches an already-cached `--db` (and JSON) resolve column types and lookups
+correctly using the snapshot — the same schema-mapping ADR 0002 depends on — without a
+live connection at all. It is not meant to fabricate live Dataverse rows. `Query()`
+therefore rejects `--snapshot` combined with any `DATAVERSE (...)` plan step up front,
+with a message pointing at the alternative, rather than letting it fail deep inside SQL 4
+CDS once a fetch is attempted.
+
+One implementation detail worth recording: `EntityMetadata`/`AttributeMetadata` built by
+hand (as in `OfflineQueryTests`) must set `AttributeMetadata.EntityLogicalName`. SQL 4
+CDS's `FetchXmlScan.AddAttribute` looks up owning-entity metadata by
+`attrMetadata.EntityLogicalName`, and a real snapshot round-trip always has this set
+(the SDK populates it), but a manually constructed one silently doesn't unless told to —
+the failure mode is an opaque `Entity '(null)' is not in the metadata snapshot` error that
+has nothing to do with the actual entity name.

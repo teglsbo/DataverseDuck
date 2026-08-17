@@ -97,6 +97,11 @@ internal static class Program
               --query-file <path>      Read that query from a file instead. (--plan-file
                                        still accepted.)
               --db <path>              DuckDB file. Default: in-memory.
+              --snapshot <path>        Metadata snapshot from 'dvduck capture'. Lets a query
+                                       that only touches an already-cached --db (and JSON)
+                                       resolve column types and relationships without a live
+                                       Dataverse connection. Cannot be combined with a
+                                       DATAVERSE (...) entry, which always needs one.
               --bom                    Prefix the output with a UTF-8 byte order mark.
                                        Excel on non-English Windows needs it to read
                                        UTF-8; nothing else does. Not valid for json.
@@ -261,43 +266,15 @@ internal static class Program
 
     private static async Task<int> ReplAsync(string[] args)
     {
-        var database = ":memory:";
-        var policy = FoldingPolicy.Warn;
-        string? snapshotPath = null;
-
-        for (var i = 0; i < args.Length; i++)
+        if (!ReplArguments.TryParse(args, out var parsedArgs, out var argsError))
         {
-            switch (args[i])
-            {
-                case "--db":
-                    if (++i >= args.Length)
-                    {
-                        Console.Error.WriteLine("--db needs a path.");
-                        return 2;
-                    }
-
-                    database = args[i];
-                    break;
-
-                case "--snapshot":
-                    if (++i >= args.Length)
-                    {
-                        Console.Error.WriteLine("--snapshot needs a path.");
-                        return 2;
-                    }
-
-                    snapshotPath = args[i];
-                    break;
-
-                case "--strict":
-                    policy = FoldingPolicy.RejectCritical;
-                    break;
-
-                default:
-                    Console.Error.WriteLine($"Unknown option '{args[i]}'. Run 'dvduck help'.");
-                    return 2;
-            }
+            Console.Error.WriteLine(argsError);
+            return 2;
         }
+
+        var database = parsedArgs!.Database;
+        var policy = parsedArgs.Policy;
+        var snapshotPath = parsedArgs.SnapshotPath;
 
         MetadataSnapshot? snapshot = null;
 
@@ -528,110 +505,26 @@ internal static class Program
 
     private static int Query(string[] args)
     {
+        if (!QueryArguments.TryParse(args, out var parsedArgs, out var argsError))
+        {
+            Console.Error.WriteLine(argsError);
+            return 2;
+        }
+
+        foreach (var deprecation in parsedArgs!.Deprecations)
+            Console.Error.WriteLine(deprecation);
+
+        var database = parsedArgs.Database;
+        var policy = parsedArgs.Policy;
+        var format = parsedArgs.Format;
+        var byteOrderMark = parsedArgs.ByteOrderMark;
+
         List<PlanStep> steps = [];
-        string? finalSql = null;
-        string? plan = null;
-        var database = ":memory:";
-        var policy = FoldingPolicy.Warn;
-        var format = OutputFormat.Tsv;
-        var byteOrderMark = false;
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            var needsValue = args[i] is "--db" or "--query" or "--query-file" or "--plan" or "--plan-file" or "--format";
-
-            if (needsValue && i + 1 >= args.Length)
-            {
-                Console.Error.WriteLine($"{args[i]} needs a value.");
-                return 2;
-            }
-
-            switch (args[i])
-            {
-                case "--cache":
-                case "--json":
-                case "--run":
-                    Console.Error.WriteLine(
-                        $"{args[i]} was removed. A query now names its own sources in one --query:");
-                    Console.Error.WriteLine();
-                    Console.Error.WriteLine("  dvduck query --query \"");
-                    Console.Error.WriteLine("    WITH logs AS JSON ('webchat/*.json'),");
-                    Console.Error.WriteLine("         crm_contact AS DATAVERSE (SELECT ... WHERE id IN {{SELECT ... FROM logs}})");
-                    Console.Error.WriteLine("    SELECT ...\"");
-                    Console.Error.WriteLine();
-                    Console.Error.WriteLine("Entries run top to bottom, so the order is stated rather than implied.");
-                    return 2;
-
-                case "--plan":
-                    Console.Error.WriteLine("--plan is now --query -- it runs the statement, it does not just plan it. Still accepted.");
-                    plan = args[++i];
-                    break;
-
-                case "--query":
-                    plan = args[++i];
-                    break;
-
-                case "--plan-file":
-                case "--query-file":
-                {
-                    if (args[i] == "--plan-file")
-                        Console.Error.WriteLine("--plan-file is now --query-file. Still accepted.");
-
-                    var planPath = args[++i];
-                    if (!File.Exists(planPath))
-                    {
-                        Console.Error.WriteLine($"No query file at '{planPath}'.");
-                        return 2;
-                    }
-
-                    plan = File.ReadAllText(planPath);
-                    break;
-                }
-
-                case "--db":
-                    database = args[++i];
-                    break;
-
-                case "--format":
-                    if (!ResultWriter.TryParseFormat(args[++i], out format, out var formatError))
-                    {
-                        Console.Error.WriteLine(formatError);
-                        return 2;
-                    }
-
-                    break;
-
-                case "--bom":
-                    byteOrderMark = true;
-                    break;
-
-                case "--strict":
-                    policy = FoldingPolicy.RejectCritical;
-                    break;
-
-                default:
-                    Console.Error.WriteLine($"Unknown option '{args[i]}'. Run 'dvduck help'.");
-                    return 2;
-            }
-        }
-
-        if (byteOrderMark && format == OutputFormat.Json)
-        {
-            Console.Error.WriteLine(
-                "--bom cannot be used with --format json: RFC 8259 section 8.1 says implementations " +
-                "must not add a byte order mark to JSON, and many parsers reject it.");
-            return 2;
-        }
-
-        if (plan is null)
-        {
-            Console.Error.WriteLine("Nothing to run. Pass --query \"WITH ...\" or --query-file <path>.");
-            return 2;
-        }
+        string finalSql;
 
         try
         {
-            var parsed = DataversePlanParser.Parse(plan);
+            var parsed = DataversePlanParser.Parse(parsedArgs.Plan!);
             steps.AddRange(parsed.Steps);
             finalSql = parsed.FinalSql;
         }
@@ -641,14 +534,27 @@ internal static class Program
             return 2;
         }
 
+        var needsDataverse = steps.Any(step => step.Kind == PlanStepKind.Dataverse);
+
+        if (needsDataverse && parsedArgs.SnapshotPath is not null)
+        {
+            Console.Error.WriteLine(
+                "--snapshot cannot fetch from Dataverse: it lets a query that only touches an already-cached " +
+                "--db (and JSON) resolve schema without a live connection, but this query has a DATAVERSE (...) " +
+                "step, which needs a real tenant. Drop --snapshot, or remove the Dataverse step and query --db " +
+                "alone.");
+            return 2;
+        }
+
         // Only connect to Dataverse if something actually needs it. Querying a
         // previously-populated --db file alongside JSON should work offline.
         ServiceClient? client = null;
         MarkMpn.Sql4Cds.Engine.Sql4CdsConnection? dataverse = null;
+        SnapshotMetadataCache? snapshotMetadata = null;
 
         try
         {
-            if (steps.Any(step => step.Kind == PlanStepKind.Dataverse))
+            if (needsDataverse)
             {
                 if (!TryLoadOptions(out var options))
                     return 2;
@@ -663,6 +569,18 @@ internal static class Program
                 }
 
                 dataverse = Sql4CdsConnectionFactory.Create(client);
+            }
+            else if (parsedArgs.SnapshotPath is not null)
+            {
+                if (!File.Exists(parsedArgs.SnapshotPath))
+                {
+                    Console.Error.WriteLine($"No metadata snapshot at '{parsedArgs.SnapshotPath}'.");
+                    Console.Error.WriteLine("Run 'dvduck capture <table ...>' to create one.");
+                    return 2;
+                }
+
+                snapshotMetadata = SnapshotMetadataCache.FromFile(parsedArgs.SnapshotPath);
+                dataverse = Sql4CdsConnectionFactory.CreateOffline(snapshotMetadata);
             }
 
             using var duck = UtcTimestampPolicy.OpenConnection($"Data Source={database}");
@@ -680,9 +598,9 @@ internal static class Program
                 // the reader reports both as DateTime with Kind=Unspecified.
                 Mapper = new DataverseDuck.Schema.DataverseSchemaMapper
                 {
-                    Metadata = client is null
-                        ? null
-                        : new MarkMpn.Sql4Cds.Engine.AttributeMetadataCache(client),
+                    Metadata = client is not null
+                        ? new MarkMpn.Sql4Cds.Engine.AttributeMetadataCache(client)
+                        : snapshotMetadata,
                 },
             };
 

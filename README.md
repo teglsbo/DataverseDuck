@@ -70,9 +70,12 @@ Working end to end against a real Dataverse environment.
       Tab-accept, multi-line statements, and history recall on Up arrow — is
       now covered by automated end-to-end tests driving a scripted `IConsole`
       against the real PrettyPrompt loop; see `ReplInteractiveTests`.)
-- [ ] **`dvduck query --snapshot`.** `capture` can write a metadata snapshot but `query`
-      cannot read one back, so offline development needs code rather than the CLI
-      (ADR 0003).
+- [x] **`dvduck query --snapshot`.** `query --snapshot <path>` now builds an offline
+      SQL 4 CDS connection from a captured metadata snapshot, with no live Dataverse
+      connection at all. This lets a query that only touches an already-cached `--db`
+      (and JSON) resolve column types and relationships correctly (the datetime/lookup
+      mapping ADR 0002 depends on) without a tenant. It still refuses combination with
+      a `DATAVERSE (...)` step, which needs a real fetch (ADR 0003).
 - [ ] **Package metadata.** No `RepositoryUrl`, and the version is pinned at 0.1.0.
 - [ ] **Unexplained: `COUNT(*)` returned 56,161** despite a documented 50,000 aggregate
       limit. Either the limit does not apply to `count`, or it is not enforced here.
