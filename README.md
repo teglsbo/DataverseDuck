@@ -63,14 +63,16 @@ Working end to end against a real Dataverse environment.
       unit tested against a generated certificate, but this project's tenant
       authenticates with a secret, so the SDK's certificate constructor has never
       actually run against Dataverse.
-- [ ] **Popup non-narrowing observation.** Noticed by hand in a real pty: the
-      completion popup's candidate list does not appear to re-narrow as more
-      characters are typed past the keystroke that opened it — Tab still
-      accepts the right item, so low severity, but worth a closer look. (The
-      rest of the interactive REPL — submit-on-Enter with results and errors,
-      Tab-accept, multi-line statements, and history recall on Up arrow — is
-      now covered by automated end-to-end tests driving a scripted `IConsole`
-      against the real PrettyPrompt loop; see `ReplInteractiveTests`.)
+- [x] **Popup non-narrowing observation — root-caused, not our bug.** Confirmed with a
+      scripted pty against a real snapshot: this is PrettyPrompt v6's own documented
+      design ("Completion list contains also non-matching items (below matching ones)"
+      per its changelog), not an issue in this codebase. It only re-invokes our
+      `GetCompletionItemsAsync` while the typed text still extends what was typed when
+      the window opened, and its internal `SlidingArrayWindow` always fills the
+      configured window height (9 rows) with the best-ranked items from that one
+      candidate list, padding with non-matching leftovers rather than shrinking —
+      exactly like Visual Studio's IntelliSense. Tab still accepts the right item.
+      Left as-is.
 - [x] **`dvduck query --snapshot`.** `query --snapshot <path>` now builds an offline
       SQL 4 CDS connection from a captured metadata snapshot, with no live Dataverse
       connection at all. This lets a query that only touches an already-cached `--db`
