@@ -126,13 +126,38 @@ width. A table with 300 wide columns scans far more slowly than
 `solutioncomponent` does, which pushes the crossover higher and favours pushdown
 more strongly.
 
-## Observation not explained by the documentation
+## Explained: `COUNT(*)` returning more than 50,000
 
 `SELECT COUNT(*) FROM solutioncomponent` returned 56,161 without error, despite
-the documented 50,000-record aggregate limit. SQL 4 CDS appears to partition
-aggregate queries to work around that limit. This was not investigated further;
-do not rely on it without measuring, and treat 50,000 as the documented
-behaviour.
+the documented 50,000-record aggregate limit. It is not that the limit does not
+apply, or that it is unenforced here: SQL 4 CDS retries around it.
+
+The aggregate first runs as a single native FetchXML aggregate, as always. If
+Dataverse rejects it with `AggregateQueryRecordLimitExceeded` (fault code
+`-2147164125`, checked in `BaseAggregateNode.IsAggregateQueryLimitExceeded`),
+the engine falls back to `PartitionedAggregateNode`
+(`MarkMpn.Sql4Cds.Engine/ExecutionPlan/PartitionedAggregateNode.cs`): it fetches
+the table's min/max `createdon`, splits that range into date partitions, runs
+the same aggregate FetchXML separately per partition — each comfortably under
+50,000 rows — and sums the partial results client-side. A partition that still
+overflows is split further (`PartitionOverflowException` drives the recursion);
+`MaxDOP` controls how many partitions run in parallel.
+
+So both readings in this project's own docs are correct at once: 50,000 is the
+limit *per aggregate request Dataverse will execute*, and it is enforced every
+time — `COUNT(*)` over 56,161 rows never ran as one request. The 50,000 figure
+in the table above should be read as "per partition", not "per query": a table
+with tens of millions of rows can still be counted through this path, at the
+cost of one round trip per ~50,000-row date range plus the two min/max lookups
+that seed the partitioning.
+
+This is opaque only because it is silent — there is no warning, log line, or
+plan-analysis signal in this project surfacing that a `COUNT`/`SUM`/`AVG` took
+the partitioned path rather than the single-request one. `ExecutionPlanAnalyzer`
+(ADR 0004) does not currently distinguish them; a `PartitionedAggregateNode` in
+the plan would be the thing to detect if this ever needs to be visible to a
+caller (for example, to warn that a query is about to make dozens of round
+trips instead of one).
 
 ## What this means for this project
 

@@ -80,8 +80,11 @@ Working end to end against a real Dataverse environment.
       repo, so `dotnet pack` embeds the commit SHA into the nuspec. The version stays
       pinned at 0.1.0 deliberately: neither package has been published yet (nothing on
       nuget.org consumes it), so there is no compatibility promise to keep by bumping it.
-- [ ] **Unexplained: `COUNT(*)` returned 56,161** despite a documented 50,000 aggregate
-      limit. Either the limit does not apply to `count`, or it is not enforced here.
+- [x] **Explained: `COUNT(*)` returned 56,161** despite the documented 50,000 aggregate
+      limit. SQL 4 CDS retries a rejected aggregate as `PartitionedAggregateNode`,
+      splitting the query into `createdon` date ranges under 50,000 rows each and summing
+      client-side, silently. The limit is real and enforced per partition; see
+      [docs/large-tables.md](docs/large-tables.md#explained-count-returning-more-than-50000).
 - [ ] **Unexplained: a trailing newline flips `read_json_auto` type inference**
       (ADR 0002, measurement 9).
 
