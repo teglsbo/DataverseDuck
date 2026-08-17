@@ -23,6 +23,15 @@ public sealed class DataverseOptions
     public const string CertificatePasswordVariable = "DATAVERSE_CERT_PASSWORD";
     public const string CertificateThumbprintVariable = "DATAVERSE_CERT_THUMBPRINT";
 
+    /// <summary>
+    /// Set to 'devicecode' to sign in interactively as a human instead of as
+    /// the application. This is the one auth mode where MFA can apply, since
+    /// it is the only one with a user in the flow at all.
+    /// </summary>
+    public const string AuthModeVariable = "DATAVERSE_AUTH_MODE";
+
+    public const string DeviceCodeAuthMode = "devicecode";
+
     /// <summary>Selects a profile when no name is passed explicitly.</summary>
     public const string ProfileVariable = "DATAVERSE_PROFILE";
 
@@ -73,14 +82,11 @@ public sealed class DataverseOptions
     public ServiceClient CreateServiceClient() => Credential.CreateServiceClient(this);
 
     /// <summary>
-    /// Builds an MSAL confidential client for the configured credential, for
-    /// the Web API paths that do not go through the SDK.
+    /// Acquires a Web API access token for the configured credential, for the
+    /// Web API paths (doctor, budget probing) that do not go through the SDK.
     /// </summary>
-    public IConfidentialClientApplication CreateConfidentialClient() =>
-        Credential
-            .Apply(ConfidentialClientApplicationBuilder.Create(ClientId))
-            .WithAuthority(Authority)
-            .Build();
+    public Task<AuthenticationResult> AcquireTokenAsync(CancellationToken cancellationToken = default) =>
+        Credential.AcquireTokenAsync(this, cancellationToken);
 
     /// <summary>Reads settings from environment variables for the default profile.</summary>
     public static bool TryLoadFromEnvironment(
@@ -154,6 +160,7 @@ public sealed class DataverseOptions
             Read(CertificatePathVariable),
             Read(CertificatePasswordVariable),
             Read(CertificateThumbprintVariable),
+            Read(AuthModeVariable),
             profile,
             out options,
             out error);
@@ -167,6 +174,7 @@ public sealed class DataverseOptions
     [
         UrlVariable, TenantIdVariable, ClientIdVariable, ClientSecretVariable,
         CertificatePathVariable, CertificatePasswordVariable, CertificateThumbprintVariable,
+        AuthModeVariable,
     ];
 
     private static bool ProfileExists(string normalized) =>
@@ -297,7 +305,7 @@ public sealed class DataverseOptions
         string? tenantId,
         [NotNullWhen(true)] out DataverseOptions? options,
         [NotNullWhen(false)] out string? error) =>
-        TryCreate(url, clientId, clientSecret, tenantId, null, null, null, null, out options, out error);
+        TryCreate(url, clientId, clientSecret, tenantId, null, null, null, null, null, out options, out error);
 
     public static bool TryCreate(
         string? url,
@@ -307,6 +315,7 @@ public sealed class DataverseOptions
         string? certificatePath,
         string? certificatePassword,
         string? certificateThumbprint,
+        string? authMode,
         string? profile,
         [NotNullWhen(true)] out DataverseOptions? options,
         [NotNullWhen(false)] out string? error)
@@ -346,7 +355,7 @@ public sealed class DataverseOptions
         }
 
         if (!TryResolveCredential(
-                clientSecret, certificatePath, certificatePassword, certificateThumbprint,
+                clientSecret, certificatePath, certificatePassword, certificateThumbprint, authMode,
                 profile, out var credential, out error))
             return false;
 
@@ -367,12 +376,19 @@ public sealed class DataverseOptions
     /// Exactly one credential must be configured. Two is refused rather than
     /// resolved by precedence: a leftover secret quietly winning over a
     /// certificate someone had just switched to would be very hard to see.
+    /// Device-code is the exception: it needs no secret material, so it is
+    /// selected by an explicit opt-in (<see cref="AuthModeVariable"/>) rather
+    /// than by a value being present, and is likewise refused alongside any
+    /// of the other three -- an app that could authenticate either as itself
+    /// or as whoever is at the keyboard is not a choice this should make
+    /// silently.
     /// </summary>
     private static bool TryResolveCredential(
         string? clientSecret,
         string? certificatePath,
         string? certificatePassword,
         string? certificateThumbprint,
+        string? authMode,
         string? profile,
         [NotNullWhen(true)] out DataverseCredential? credential,
         [NotNullWhen(false)] out string? error)
@@ -381,16 +397,28 @@ public sealed class DataverseOptions
 
         string Named(string variable) => VariableName(variable, profile);
 
+        var isDeviceCode = string.Equals(authMode?.Trim(), DeviceCodeAuthMode, StringComparison.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(authMode) && !isDeviceCode)
+        {
+            error = $"{Named(AuthModeVariable)}='{authMode}' is not recognized. The only supported " +
+                    $"value is '{DeviceCodeAuthMode}'; leave it unset to authenticate with a secret " +
+                    "or certificate instead.";
+            return false;
+        }
+
         var configured = new List<string>();
         if (!string.IsNullOrWhiteSpace(clientSecret)) configured.Add(Named(ClientSecretVariable));
         if (!string.IsNullOrWhiteSpace(certificatePath)) configured.Add(Named(CertificatePathVariable));
         if (!string.IsNullOrWhiteSpace(certificateThumbprint)) configured.Add(Named(CertificateThumbprintVariable));
+        if (isDeviceCode) configured.Add(Named(AuthModeVariable));
 
         if (configured.Count == 0)
         {
             error = $"No credential is configured. Set {Named(ClientSecretVariable)} for a client " +
-                    $"secret, {Named(CertificatePathVariable)} for a certificate file, or " +
-                    $"{Named(CertificateThumbprintVariable)} for one in the platform certificate store.";
+                    $"secret, {Named(CertificatePathVariable)} for a certificate file, " +
+                    $"{Named(CertificateThumbprintVariable)} for one in the platform certificate " +
+                    $"store, or {Named(AuthModeVariable)}={DeviceCodeAuthMode} for interactive sign-in.";
             return false;
         }
 
@@ -399,6 +427,13 @@ public sealed class DataverseOptions
             error = $"More than one credential is configured ({string.Join(", ", configured)}). " +
                     "Set exactly one, so that which of them authenticates is never in doubt.";
             return false;
+        }
+
+        if (isDeviceCode)
+        {
+            credential = new DeviceCodeCredential();
+            error = null;
+            return true;
         }
 
         if (!string.IsNullOrWhiteSpace(clientSecret))

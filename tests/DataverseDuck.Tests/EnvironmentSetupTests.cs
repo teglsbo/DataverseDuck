@@ -116,6 +116,66 @@ public class DataverseOptionsTests
         Assert.Contains("s3cret", connectionString);
         Assert.Contains("RequireNewInstance=true", connectionString);
     }
+
+    [Fact]
+    public void Device_code_auth_mode_selects_the_device_code_credential_with_no_secret()
+    {
+        Assert.True(DataverseOptions.TryCreate(
+            "https://contoso.crm4.dynamics.com", ValidClientId, null, null,
+            null, null, null, "devicecode", null,
+            out var options, out var error));
+
+        Assert.Null(error);
+        Assert.IsType<DeviceCodeCredential>(options.Credential);
+    }
+
+    [Fact]
+    public void Device_code_auth_mode_is_case_insensitive_and_tolerates_whitespace()
+    {
+        Assert.True(DataverseOptions.TryCreate(
+            "https://contoso.crm4.dynamics.com", ValidClientId, null, null,
+            null, null, null, "  DeviceCode  ", null,
+            out var options, out var error));
+
+        Assert.Null(error);
+        Assert.IsType<DeviceCodeCredential>(options.Credential);
+    }
+
+    [Fact]
+    public void An_unrecognized_auth_mode_is_rejected()
+    {
+        Assert.False(DataverseOptions.TryCreate(
+            "https://contoso.crm4.dynamics.com", ValidClientId, null, null,
+            null, null, null, "interactive", null,
+            out var options, out var error));
+
+        Assert.Null(options);
+        Assert.Contains(DataverseOptions.AuthModeVariable, error);
+    }
+
+    [Fact]
+    public void Device_code_alongside_a_secret_is_refused_rather_than_resolved_by_precedence()
+    {
+        Assert.False(DataverseOptions.TryCreate(
+            "https://contoso.crm4.dynamics.com", ValidClientId, "secret", null,
+            null, null, null, "devicecode", null,
+            out var options, out var error));
+
+        Assert.Null(options);
+        Assert.Contains("More than one credential", error);
+        Assert.Contains(DataverseOptions.AuthModeVariable, error);
+        Assert.Contains(DataverseOptions.ClientSecretVariable, error);
+    }
+
+    [Fact]
+    public void No_credential_at_all_mentions_device_code_as_an_option()
+    {
+        Assert.False(DataverseOptions.TryCreate(
+            "https://contoso.crm4.dynamics.com", ValidClientId, null, null, out _, out var error));
+
+        Assert.Contains(DataverseOptions.AuthModeVariable, error);
+        Assert.Contains(DataverseOptions.DeviceCodeAuthMode, error);
+    }
 }
 
 public class AccessTokenClaimsTests

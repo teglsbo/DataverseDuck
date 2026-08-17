@@ -116,11 +116,7 @@ public sealed record ServiceProtectionBudget
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        var application = options.CreateConfidentialClient();
-
-        var token = await application
-            .AcquireTokenForClient([options.Scope])
-            .ExecuteAsync(cancellationToken);
+        var token = await options.AcquireTokenAsync(cancellationToken);
 
         var owned = httpClient is null ? new HttpClient() : null;
         var client = httpClient ?? owned!;

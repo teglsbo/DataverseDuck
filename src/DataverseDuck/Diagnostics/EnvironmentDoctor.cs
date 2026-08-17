@@ -108,11 +108,7 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
         const string name = "Token acquisition";
         try
         {
-            var app = _options.CreateConfidentialClient();
-
-            var result = await app
-                .AcquireTokenForClient([_options.Scope])
-                .ExecuteAsync(cancellationToken);
+            var result = await _options.AcquireTokenAsync(cancellationToken);
 
             return (CheckResult.Pass(name, $"Acquired a token for {_options.Scope}, expires {result.ExpiresOn:u}."),
                 result.AccessToken);

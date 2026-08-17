@@ -8,10 +8,17 @@ using Microsoft.PowerPlatform.Dataverse.Client;
 namespace DataverseDuck.Configuration;
 
 /// <summary>
-/// How the application registration proves who it is. Either a client secret
-/// or a certificate; there is no interactive sign-in anywhere in this library.
+/// How the application proves who it is: a client secret, a certificate, or --
+/// for a human running the CLI at a keyboard rather than a headless service --
+/// an interactive device-code sign-in.
 ///
-/// This exists because the two credentials have to satisfy three different
+/// The first two are app-only (MSAL confidential client, no user, no MFA
+/// prompt possible even if the tenant requires it). Device-code is the only
+/// credential here that authenticates as a *person*, which is also the only
+/// case where MFA can apply at all, since MFA is a user-identity concept and
+/// the app registration flows have no user in them.
+///
+/// This exists because the credentials have to satisfy three different
 /// consumers -- MSAL, <see cref="ServiceClient"/>, and the diagnostics that
 /// describe the configuration back to a human -- and only one of those accepts
 /// a connection string. A certificate loaded from a PFX file cannot be
@@ -26,8 +33,13 @@ public abstract class DataverseCredential
     /// </summary>
     public abstract string Describe();
 
-    /// <summary>Applies this credential to an MSAL confidential client.</summary>
-    public abstract ConfidentialClientApplicationBuilder Apply(ConfidentialClientApplicationBuilder builder);
+    /// <summary>
+    /// Acquires a Web API access token for <see cref="DataverseOptions.Scope"/>.
+    /// Confidential credentials do this silently; <see cref="DeviceCodeCredential"/>
+    /// may prompt on a cold cache.
+    /// </summary>
+    public abstract Task<AuthenticationResult> AcquireTokenAsync(
+        DataverseOptions options, CancellationToken cancellationToken);
 
     /// <summary>Builds a connected <see cref="ServiceClient"/> for the given environment.</summary>
     public abstract ServiceClient CreateServiceClient(DataverseOptions options);
@@ -44,8 +56,16 @@ public sealed class ClientSecretCredential(string secret) : DataverseCredential
 
     public override string Describe() => $"secret={AccessTokenClaims.Mask(Secret)}";
 
-    public override ConfidentialClientApplicationBuilder Apply(ConfidentialClientApplicationBuilder builder) =>
-        builder.WithClientSecret(Secret);
+    public override async Task<AuthenticationResult> AcquireTokenAsync(
+        DataverseOptions options, CancellationToken cancellationToken)
+    {
+        var app = ConfidentialClientApplicationBuilder.Create(options.ClientId)
+            .WithClientSecret(Secret)
+            .WithAuthority(options.Authority)
+            .Build();
+
+        return await app.AcquireTokenForClient([options.Scope]).ExecuteAsync(cancellationToken);
+    }
 
     public override ServiceClient CreateServiceClient(DataverseOptions options) =>
         new(ToConnectionString(options));
@@ -75,8 +95,16 @@ public sealed class CertificateCredential(X509Certificate2 certificate, string s
         $"certificate={Certificate.Thumbprint} subject='{Certificate.Subject}' " +
         $"expires={Certificate.NotAfter:yyyy-MM-dd} from={Source}";
 
-    public override ConfidentialClientApplicationBuilder Apply(ConfidentialClientApplicationBuilder builder) =>
-        builder.WithCertificate(Certificate);
+    public override async Task<AuthenticationResult> AcquireTokenAsync(
+        DataverseOptions options, CancellationToken cancellationToken)
+    {
+        var app = ConfidentialClientApplicationBuilder.Create(options.ClientId)
+            .WithCertificate(Certificate)
+            .WithAuthority(options.Authority)
+            .Build();
+
+        return await app.AcquireTokenForClient([options.Scope]).ExecuteAsync(cancellationToken);
+    }
 
     /// <summary>
     /// A certificate cannot travel in a connection string unless it is already
@@ -197,4 +225,83 @@ public sealed class CertificateCredential(X509Certificate2 certificate, string s
                 "by default, so a certificate file is usually the better option there.";
         return false;
     }
+}
+
+/// <summary>
+/// Interactive sign-in as a human, via MSAL's device-code flow: the CLI prints
+/// a URL and a short code, the user opens the URL on any device, enters the
+/// code, and completes the sign-in there -- including any MFA challenge the
+/// tenant requires. This is the only credential in this file that can ever
+/// see an MFA prompt, because MFA is a property of a *user* session and the
+/// other two credentials authenticate the application itself, with no user
+/// in the flow at all.
+///
+/// Uses a <see cref="PublicClientApplication"/> (not confidential -- there is
+/// no secret to protect), and caches the resulting token in memory for the
+/// process lifetime via MSAL's own silent-token-first behaviour, so a session
+/// that acquires more than one token is not prompted twice.
+/// </summary>
+public sealed class DeviceCodeCredential(Func<DeviceCodeResult, Task>? onCodeReady = null) : DataverseCredential
+{
+    private IPublicClientApplication? _app;
+
+    public override string Describe() => "device-code (interactive sign-in, human user)";
+
+    public override async Task<AuthenticationResult> AcquireTokenAsync(
+        DataverseOptions options, CancellationToken cancellationToken)
+    {
+        var app = GetOrBuildApp(options);
+
+        var accounts = await app.GetAccountsAsync();
+        var existing = accounts.FirstOrDefault();
+        if (existing is not null)
+        {
+            try
+            {
+                return await app.AcquireTokenSilent([options.Scope], existing)
+                    .ExecuteAsync(cancellationToken);
+            }
+            catch (MsalUiRequiredException)
+            {
+                // Silent renewal failed (expired refresh token, revoked
+                // consent, changed MFA policy, ...) -- fall through to a
+                // fresh interactive prompt rather than failing outright.
+            }
+        }
+
+        return await app
+            .AcquireTokenWithDeviceCode([options.Scope], DefaultCallback(onCodeReady))
+            .ExecuteAsync(cancellationToken);
+    }
+
+    private static Func<DeviceCodeResult, Task> DefaultCallback(Func<DeviceCodeResult, Task>? onCodeReady) =>
+        onCodeReady ?? (deviceCode =>
+        {
+            Console.WriteLine(deviceCode.Message);
+            return Task.CompletedTask;
+        });
+
+    private IPublicClientApplication GetOrBuildApp(DataverseOptions options) =>
+        _app ??= PublicClientApplicationBuilder.Create(options.ClientId)
+            .WithAuthority(options.Authority)
+            // The well-known redirect URI for device-code and other flows with
+            // no browser to redirect back to; MSAL requires one be set anyway.
+            .WithRedirectUri("https://login.microsoftonline.com/common/oauth2/nativeclient")
+            .Build();
+
+    /// <summary>
+    /// There is no connection string shape for an interactive, per-user token,
+    /// and the SDK's <see cref="ServiceClient"/> constructors are all built
+    /// around either a connection string or a credential it manages itself.
+    /// The one exception -- <c>ServiceClient(Uri, Func&lt;string, Task&lt;string&gt;&gt;, bool, ILogger)</c>
+    /// -- accepts an arbitrary async token provider, which is exactly this
+    /// credential's <see cref="AcquireTokenAsync"/> wrapped to return a bare
+    /// access token string instead of the full MSAL result.
+    /// </summary>
+    public override ServiceClient CreateServiceClient(DataverseOptions options) =>
+        new(
+            instanceUrl: options.EnvironmentUrl,
+            tokenProviderFunction: async _ => (await AcquireTokenAsync(options, CancellationToken.None)).AccessToken,
+            useUniqueInstance: true,
+            logger: null!);
 }

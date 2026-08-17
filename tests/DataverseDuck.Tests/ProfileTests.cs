@@ -309,7 +309,7 @@ public class CredentialTests : IDisposable
         out string? error) =>
         DataverseOptions.TryCreate(
             Url, ValidClientId, secret, null,
-            certificatePath, certificatePassword, thumbprint, null,
+            certificatePath, certificatePassword, thumbprint, null, null,
             out options, out error);
 
     /// <summary>Self-signed, generated here so the test needs nothing external.</summary>

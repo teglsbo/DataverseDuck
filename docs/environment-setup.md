@@ -162,6 +162,52 @@ certificate you just switched to.
 > against a live environment** — this project's tenant authenticates with a secret. The
 > code path is the SDK's documented certificate constructor, but treat it as unproven.
 
+### Device-code sign-in
+
+Both of the above authenticate the *application*, with no user and therefore no MFA
+prompt possible even if the tenant requires it. If you want to run `dvduck` as yourself
+instead — for example to pick up whatever access and MFA policy your own account has,
+rather than provisioning a service principal at all — register a **public client** app
+instead of a confidential one:
+
+- Same **New registration** screen as above, but this time it needs no secret or
+  certificate at all.
+- Redirect URI: **Public client/native (mobile & desktop)**, value
+  `https://login.microsoftonline.com/common/oauth2/nativeclient`. This is the
+  well-known redirect used by device-code and other flows that have no browser to
+  redirect back to on this machine — MSAL requires *some* redirect URI be registered even
+  though device-code never actually navigates to it.
+- Under **Authentication**, enable **Allow public client flows**. Device-code is
+  refused with `AADSTS7000218` until this is turned on.
+
+Then set:
+
+```bash
+export DATAVERSE_AUTH_MODE=devicecode
+```
+
+with no `DATAVERSE_CLIENT_SECRET`, `DATAVERSE_CERT_PATH`, or `DATAVERSE_CERT_THUMBPRINT` —
+setting any of those alongside `DATAVERSE_AUTH_MODE` is refused for the same reason two
+credentials at once is refused. Running `dvduck` then prints something like:
+
+```
+To sign in, use a web browser to open https://microsoft.com/devicelogin and enter the
+code ABCD-EFGH to authenticate.
+```
+
+Open that URL on **any** device with a browser — it does not have to be the machine
+running `dvduck` — and complete the sign-in there, including any MFA challenge the tenant
+asks for. This is why device-code works the same in a headless container or over SSH as
+it does on a desktop: no browser or GUI is ever needed on the machine running the CLI
+itself, only outbound HTTPS to `login.microsoftonline.com`.
+
+You will still need an **application user** for this identity in Dataverse (step 4 below)
+— a user account signing in does not itself grant Dataverse access; a security role does.
+
+> Device-code sign-in is implemented and unit tested for its configuration-resolution
+> logic, but **the interactive flow itself has not been verified against a live tenant** —
+> the same caveat as certificate auth above.
+
 ### API permissions
 
 **None are required.** Microsoft's own S2S walkthrough states plainly that "Delegated
