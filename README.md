@@ -76,7 +76,10 @@ Working end to end against a real Dataverse environment.
       (and JSON) resolve column types and relationships correctly (the datetime/lookup
       mapping ADR 0002 depends on) without a tenant. It still refuses combination with
       a `DATAVERSE (...)` step, which needs a real fetch (ADR 0003).
-- [ ] **Package metadata.** No `RepositoryUrl`, and the version is pinned at 0.1.0.
+- [x] **Package metadata.** `RepositoryUrl`/`PackageProjectUrl` now point at the GitHub
+      repo, so `dotnet pack` embeds the commit SHA into the nuspec. The version stays
+      pinned at 0.1.0 deliberately: neither package has been published yet (nothing on
+      nuget.org consumes it), so there is no compatibility promise to keep by bumping it.
 - [ ] **Unexplained: `COUNT(*)` returned 56,161** despite a documented 50,000 aggregate
       limit. Either the limit does not apply to `count`, or it is not enforced here.
 - [ ] **Unexplained: a trailing newline flips `read_json_auto` type inference**
