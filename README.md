@@ -62,11 +62,14 @@ Working end to end against a real Dataverse environment.
       unit tested against a generated certificate, but this project's tenant
       authenticates with a secret, so the SDK's certificate constructor has never
       actually run against Dataverse.
-- [ ] **Exercise the interactive REPL by hand.** The piped path is covered live, completion
-      is driven in tests through PrettyPrompt's own `IPromptCallbacks`, and the renderer
-      degrades to line reading when a terminal reports no size. What remains untested is
-      everything only a keyboard reaches: history, multi-line editing, and how the
-      completion window actually looks.
+- [ ] **Exercise the interactive REPL by hand.** Verified via a real pty (not piped):
+      typed statements submit and display results and errors correctly, and the
+      completion popup renders (boxed candidates with kind labels) and accepts the
+      highlighted item on Tab. Noticed the popup's candidate list does not appear to
+      re-narrow as more characters are typed past the keystroke that opened it —
+      Tab still accepts the right item, so low severity, but worth a closer look.
+      Still untested: history navigation across a persisted session, and multi-line
+      editing (Shift+Enter continuation).
 - [ ] **`dvduck query --snapshot`.** `capture` can write a metadata snapshot but `query`
       cannot read one back, so offline development needs code rather than the CLI
       (ADR 0003).
