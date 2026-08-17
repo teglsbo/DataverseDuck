@@ -475,6 +475,18 @@ MetadataCapture.CaptureToFile(service, ["account", "contact"], "metadata/snapsho
 var cache = SnapshotMetadataCache.FromFile("metadata/snapshot.bin");
 ```
 
+The CLI reads a captured snapshot back too, via `dvduck query --snapshot`, so offline
+development doesn't require writing code against the library:
+
+```bash
+dvduck query --db cache.duckdb --snapshot metadata/snapshot.bin \
+  --query "SELECT * FROM account"
+```
+
+This builds a `Sql4CdsConnection` with no live `IOrganizationService` at all — enough to
+resolve column types and relationships against an already-cached `--db` (and JSON), but
+a plan with a `DATAVERSE (...)` step is rejected up front since that needs a real fetch.
+
 See [ADR 0003](docs/adr/0003-metadata-snapshot-for-offline-work.md).
 
 ## Repository layout
@@ -490,7 +502,7 @@ src/DataverseDuck/          Library
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
   Repl*.cs                  Interactive session, statement loop and terminal table
-tests/DataverseDuck.Tests/  364 tests, no tenant required
+tests/DataverseDuck.Tests/  397 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/large-tables.md        Measured limits, and where key-set pushdown stops paying
@@ -498,6 +510,7 @@ docs/metadata.md            Querying the schema itself, simple to complex
 docs/sql4cds-behaviour.md   Measured engine defaults and type mapping
 docs/adr/                   Architecture decision records
 Directory.Build.props       Shared package metadata; nothing packs unless it opts in
+.github/workflows/ci.yml    Build and test on every push/PR
 ```
 
 ## Spikes
