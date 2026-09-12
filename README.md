@@ -64,6 +64,16 @@ Working end to end against a real Dataverse environment.
       unit tested against a generated certificate, but this project's tenant
       authenticates with a secret, so the SDK's certificate constructor has never
       actually run against Dataverse.
+- [x] **Cache storage version — documented as a one-way upgrade, deliberately not pinned.**
+      A `--db` file carries DuckDB's storage version, and nothing here sets
+      `STORAGE_VERSION`, so it is whatever the linked DuckDB writes. Across the v1-to-v2
+      boundary that is a real break: v1.5 writes header version 64 and reads 64–68, v2.0
+      writes 69 and reads 64–69, so a v2-written cache cannot be opened by a v1.5 client.
+      Pinning was considered and rejected — it would freeze every cache at an old format to
+      protect a case that deleting the cache also solves, and DuckDB's own open error
+      already names both versions and links its storage page. Documented under
+      [Know what is in a cache](#a-cache-upgrades-one-way) instead. See
+      [ADR 0012](docs/adr/0012-duckdb-v2-api-window.md#when-v20-ships).
 - [x] **Popup non-narrowing observation — root-caused, not our bug.** Confirmed with a
       scripted pty against a real snapshot: this is PrettyPrompt v6's own documented
       design ("Completion list contains also non-matching items (below matching ones)"
@@ -329,6 +339,32 @@ logs  view, loaded 3h ago
 
 The manifest is written inside the load's own transaction, so it can never describe rows
 that were rolled back (ADR 0009).
+
+#### A cache upgrades one way
+
+A `--db` file is a DuckDB database, so it carries DuckDB's storage version, and **opening
+one with a newer DuckDB can upgrade it irreversibly**. Newer DuckDB reads older files;
+older DuckDB cannot read newer ones. Nothing here pins the version — a cache is written in
+whatever format the linked DuckDB writes by default.
+
+Concretely, across the v1-to-v2 boundary: DuckDB v1.5 writes storage header version 64 and
+reads 64 through 68. DuckDB v2.0 writes 69 and reads 64 through 69. So a v2-linked `dvduck`
+opens every existing cache, and a cache it has written is one version past what a v1.5
+client can read. That client fails at open with DuckDB's own error:
+
+```
+Trying to read a database file with version number 69, but we can only read versions
+between 64 and 68.
+The database file was created with a newer version of DuckDB.
+```
+
+The error names both versions and links DuckDB's storage page, so it needs no help from
+us. Treat it as the expected outcome of a one-way upgrade, not a fault.
+
+The practical rule: **a cache shared between machines is only as portable as the oldest
+`dvduck` that must read it.** If that matters, keep the cache disposable — it is a cache,
+and `--db` can always be deleted and refetched — or standardise the `dvduck` version
+across the machines that share one. Caches are not an archive format.
 
 ### Fetch once, ask many questions
 
@@ -599,6 +635,7 @@ They are kept because the ADRs cite them as evidence. They are not part of the b
 | `MetadataSpike` | Can SQL 4 CDS run without a live connection? | Yes, but metadata must be captured, not synthesised |
 | `TimezoneSpike` | How do timestamps behave across the seam? | Six rules, now enforced in code |
 | `ThrottleSpike` | Can we provoke a real 429? | No, three ways — and why is the finding |
+| `BulkInsertSpike` | What does writing through SQL 4 CDS cost? | ~215 rows/s in, ~33 out; batching and DOP only pay together |
 
 ## Licensing and telemetry notes
 
