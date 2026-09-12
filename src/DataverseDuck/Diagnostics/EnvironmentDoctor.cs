@@ -44,6 +44,9 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
 
         checks.Add(InspectToken(accessToken));
 
+        if (InspectTokenCache() is { } cacheCheck)
+            checks.Add(cacheCheck);
+
         var (whoAmICheck, service) = ConnectAndIdentify();
         checks.Add(whoAmICheck);
 
@@ -152,6 +155,38 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
                    "Copy it from Power Platform Admin Center > Environments > your environment > Environment URL.";
 
         return "Check the app registration ID, secret and tenant.";
+    }
+
+    /// <summary>
+    /// Whether an interactive sign-in will outlive this process, and whether what
+    /// was written down is encrypted.
+    ///
+    /// Only meaningful for device-code; the app-only credentials hold no user
+    /// session to remember, so this returns null and the check does not appear.
+    /// Reported rather than left silent because both answers matter to a caller:
+    /// "in memory" means the next run prompts again, and "unencrypted" means there
+    /// is a refresh token on this disk in the clear.
+    /// </summary>
+    private CheckResult? InspectTokenCache()
+    {
+        const string name = "Token cache";
+
+        if (_options.Credential is not DeviceCodeCredential { CacheStore: { } store })
+            return null;
+
+        if (store.Path is null)
+        {
+            return CheckResult.Warn(name, store.Describe(),
+                "Every run will prompt for a new device code. Set DATAVERSE_TOKEN_CACHE to a "
+                + "writable path, or use a client secret or certificate for unattended access.");
+        }
+
+        return store.Encrypted
+            ? CheckResult.Pass(name, store.Describe())
+            : CheckResult.Warn(name, store.Describe(),
+                "No platform secret store was available, so the refresh token is on disk in the "
+                + "clear with owner-only permissions. Treat the file as a password. Set "
+                + "DATAVERSE_TOKEN_CACHE_PERSIST=0 to keep the cache in memory instead.");
     }
 
     private CheckResult InspectToken(string accessToken)

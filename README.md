@@ -50,12 +50,13 @@ Working end to end against a real Dataverse environment.
 | `DataverseCache` / key-set pushdown | ✅ Built, 28 tests |
 | `.env` loading, `dvduck doctor` remedies | ✅ Built, 17 tests |
 | Named profiles / certificate credentials | ✅ Built, 31 tests; certificate path unverified live |
-| Device-code (interactive/MFA-capable) sign-in | ✅ Built, 9 tests; interactive flow unverified live |
+| Device-code (interactive/MFA-capable) sign-in | ✅ Built, 9 tests, verified live |
 | `dvduck repl` (fetch once, query many) | ✅ Built, 38 tests, verified live; key handling untested |
 | `DataverseThrottling` (429 explanation) | ✅ Built, 9 tests; could not be provoked live, see below |
 | `ServiceProtectionBudget` (limit headers) | ✅ Built, 13 tests, verified live |
 | Cache manifest (`dvduck tables`) | ✅ Built, 8 tests |
 | Verified against a live environment | ✅ All 8 doctor checks pass; two-hop JSON-to-Dataverse join verified |
+| Device-code sign-in verified live | ✅ All 8 doctor checks pass under `DATAVERSE_AUTH_MODE=devicecode` |
 
 ### Open
 
@@ -124,8 +125,34 @@ debugging session to trace, so consumers are told at build time instead of at ru
 Requires .NET 10.
 
 ```bash
-dotnet test          # 364 tests, no tenant required
+dotnet test          # 432 tests, no tenant required
 ```
+
+### Do you need a Dataverse connection at all?
+
+Most work does not, and the credential you want depends on whether a human is present.
+Decide here before following the setup below.
+
+| You want to | Command | Credential |
+|---|---|---|
+| Build, test, change code | `dotnet build`, `dotnet test` | none |
+| Query already-cached tables | `dvduck query --db cache.duckdb …` | none, as long as no `DATAVERSE (…)` step runs |
+| Resolve column types offline | `dvduck query --snapshot snap.json …` | none |
+| See what a cache holds | `dvduck tables --db cache.duckdb` | none |
+| Fetch rows from Dataverse | any `DATAVERSE (…)` step | yes |
+| Query `metadata.entity` and friends | a `DATAVERSE (…)` step | yes — a snapshot is *not* enough |
+
+And if you do need one:
+
+| Situation | Credential | Prompts? |
+|---|---|---|
+| Unattended: script, CI, agent | `DATAVERSE_CLIENT_SECRET` or `DATAVERSE_CERT_PATH` | never |
+| A person at a keyboard, no app registration | `DATAVERSE_AUTH_MODE=devicecode` | once, then remembered |
+
+Device-code requires someone to open a URL and type a code; nothing automated can complete
+it. It is remembered afterwards (see [The sign-in is remembered](#the-sign-in-is-remembered)),
+but the first sign-in, and any renewal after the refresh token lapses, needs a human. Choose
+a secret or a certificate if there will not be one.
 
 ### Connect to a real environment
 
@@ -158,6 +185,32 @@ from any device with a browser. `DATAVERSE_USERNAME` optionally picks which cach
 sign-in to reuse across runs. See
 [docs/environment-setup.md](docs/environment-setup.md#device-code-sign-in) for details,
 including using your own app registration where the well-known one isn't allowed.
+
+#### The sign-in is remembered
+
+You sign in once, not once per command. The device-code token cache is written to
+`$XDG_DATA_HOME/dvduck/msal.cache` (by default `~/.local/share/dvduck/msal.cache`), and
+later runs renew silently from it until the tenant expires the refresh token.
+`DATAVERSE_TOKEN_CACHE` moves the file; `DATAVERSE_TOKEN_CACHE_PERSIST=0` keeps the cache
+in memory as it was before, so that every run prompts again.
+
+**The file is a credential.** It holds a refresh token, exchangeable for access tokens
+without a prompt for as long as it stays valid, carrying whatever access the person who
+signed in has. Where the platform offers a secret store — login keyring, Keychain, DPAPI —
+the cache is encrypted with it. A container or an SSH session usually has no keyring, and
+the fallback is a plaintext file with owner-only permissions: the same trade `az` and `gh`
+make, but a trade. `dvduck doctor` says which of the two you got:
+
+```console
+[WARN] Token cache
+       persisted UNENCRYPTED, owner-only permissions: /home/you/.local/share/dvduck/msal.cache
+```
+
+Delete the file to sign out. For genuinely unattended access prefer a client secret or a
+certificate — those authenticate the *application*, so nothing on disk carries a person's
+session, and they never prompt. Note that device-code still falls back to an interactive
+prompt when silent renewal fails, which will block a script rather than failing it.
+See [ADR 0013](docs/adr/0013-persist-the-device-code-token-cache.md).
 
 For more than one environment, prefix any variable with a profile name:
 

@@ -33,6 +33,7 @@
     <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.5" />
     <PackageReference Include="MarkMpn.Sql4Cds.Engine" Version="10.4.4" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.79.0" />
+    <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.79.0" />
   </ItemGroup>
 
 </Project>

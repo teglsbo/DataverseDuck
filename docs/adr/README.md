@@ -21,6 +21,7 @@ Measured facts that are not themselves decisions live in
 | [0009](0009-cache-manifest.md) | Record what each cached table is, in the cache itself | Accepted |
 | [0010](0010-datetime-behaviour.md) | Read datetime behaviour from metadata, not from the value | Accepted |
 | [0011](0011-duckdb-remains-the-orchestrator.md) | DuckDB remains the orchestrator; do not invert the stack under SQL 4 CDS | Accepted |
+| [0013](0013-persist-the-device-code-token-cache.md) | Persist the device-code token cache to disk | Accepted |
 
 ## Why there is no CHANGELOG
 

@@ -245,6 +245,15 @@ public sealed class DeviceCodeCredential(string? username = null, Func<DeviceCod
     : DataverseCredential
 {
     private IPublicClientApplication? _app;
+    private TokenCacheStore? _cacheStore;
+
+    /// <summary>
+    /// How the token cache was stored, once a token has been acquired -- null
+    /// before that, since the answer depends on probing the platform's secret
+    /// store. Surfaced so <c>dvduck doctor</c> can report whether a sign-in will
+    /// outlive the process, and whether what is on disk is encrypted.
+    /// </summary>
+    public TokenCacheStore? CacheStore => _cacheStore;
 
     /// <summary>
     /// Optional. Device-code itself has no field for a username -- you type
@@ -264,7 +273,7 @@ public sealed class DeviceCodeCredential(string? username = null, Func<DeviceCod
     public override async Task<AuthenticationResult> AcquireTokenAsync(
         DataverseOptions options, CancellationToken cancellationToken)
     {
-        var app = GetOrBuildApp(options);
+        var app = await GetOrBuildAppAsync(options, cancellationToken);
 
         var accounts = await app.GetAccountsAsync();
         var existing = Username is null
@@ -299,13 +308,33 @@ public sealed class DeviceCodeCredential(string? username = null, Func<DeviceCod
             return Task.CompletedTask;
         });
 
-    private IPublicClientApplication GetOrBuildApp(DataverseOptions options) =>
-        _app ??= PublicClientApplicationBuilder.Create(options.ClientId)
+    private async Task<IPublicClientApplication> GetOrBuildAppAsync(
+        DataverseOptions options, CancellationToken cancellationToken)
+    {
+        if (_app is not null)
+        {
+            return _app;
+        }
+
+        var app = PublicClientApplicationBuilder.Create(options.ClientId)
             .WithAuthority(options.Authority)
             // The well-known redirect URI for device-code and other flows with
             // no browser to redirect back to; MSAL requires one be set anyway.
             .WithRedirectUri("https://login.microsoftonline.com/common/oauth2/nativeclient")
             .Build();
+
+        // Attach before the first token request, so the sign-in it may trigger is
+        // the one that gets written down. Only device-code needs this: the secret
+        // and certificate credentials re-acquire silently from something already
+        // on disk, so caching their tokens would add exposure and save nothing.
+        _cacheStore = TokenCacheStore.IsEnabled(Environment.GetEnvironmentVariable)
+            ? await TokenCacheStore.AttachAsync(
+                app, TokenCacheStore.ResolvePath(Environment.GetEnvironmentVariable), cancellationToken)
+            : TokenCacheStore.Disabled;
+
+        _app = app;
+        return app;
+    }
 
     /// <summary>
     /// There is no connection string shape for an interactive, per-user token,
