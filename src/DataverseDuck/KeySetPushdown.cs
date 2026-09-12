@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using DuckDB.NET.Data;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 
 namespace DataverseDuck;
 
@@ -197,6 +198,66 @@ public sealed class KeySetPushdown
             throw new FormatException($"'{OpenMarker}{CloseMarker}' is empty; it needs a DuckDB query returning key values.");
 
         return new LocalKeyQuery(inner, sql[..start], sql[(end + CloseMarker.Length)..]);
+    }
+
+    /// <summary>
+    /// Rejects a <c>{{ }}</c> key query whose statement would give a plausible but
+    /// wrong answer once batched (ADR 0014).
+    ///
+    /// <see cref="DataverseCache"/> runs <paramref name="keyQuery"/>'s statement once
+    /// per batch of keys (<see cref="Batch"/>) and appends every batch's rows into the
+    /// same table. DISTINCT, TOP, and GROUP BY would each apply within a batch instead
+    /// of across the full key set -- a result, just not the right one, so nothing
+    /// downstream would notice on its own.
+    ///
+    /// Parses with the same statement shape SQL 4 CDS itself compiles, rather than
+    /// scanning the SQL text, so this only fires for a construct that actually reaches
+    /// the query as DISTINCT/TOP/GROUP BY -- not for the substring appearing inside a
+    /// string literal, a comment, or a column alias.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The statement has DISTINCT, TOP, or GROUP BY at its outermost level.
+    /// </exception>
+    public static void ValidateBatchable(LocalKeyQuery keyQuery)
+    {
+        ArgumentNullException.ThrowIfNull(keyQuery);
+
+        // The key marker's replacement only has to parse as *some* scalar expression;
+        // the actual keys are irrelevant here, only the surrounding statement's shape is.
+        var probeSql = keyQuery.Before + "(NULL)" + keyQuery.After;
+
+        var parser = new TSql160Parser(initialQuotedIdentifiers: true);
+        TSqlFragment fragment;
+        using (var reader = new StringReader(probeSql))
+        {
+            fragment = parser.Parse(reader, out var errors);
+
+            // Not this method's job to validate SQL syntax. SQL 4 CDS's own compiler
+            // sees the exact same text and will reject it with a clearer error.
+            if (errors.Count > 0)
+                return;
+        }
+
+        if (fragment is not TSqlScript { Batches: [{ Statements: [SelectStatement { QueryExpression: QuerySpecification spec }] }] })
+            return;
+
+        if (spec.UniqueRowFilter == UniqueRowFilter.Distinct)
+            throw new InvalidOperationException(
+                "A DATAVERSE(...) source with a {{ }} key query is fetched in batches, so DISTINCT " +
+                "would only remove duplicates within each batch, not across the full key set. Apply " +
+                "DISTINCT to the cached result afterwards instead.");
+
+        if (spec.TopRowFilter is not null)
+            throw new InvalidOperationException(
+                "A DATAVERSE(...) source with a {{ }} key query is fetched in batches, so TOP would " +
+                "apply per batch rather than to the full key set. Apply TOP to the cached result " +
+                "afterwards instead.");
+
+        if (spec.GroupByClause is not null)
+            throw new InvalidOperationException(
+                "A DATAVERSE(...) source with a {{ }} key query is fetched in batches, so GROUP BY " +
+                "would group within each batch rather than across the full key set. Apply GROUP BY " +
+                "to the cached result afterwards instead.");
     }
 }
 

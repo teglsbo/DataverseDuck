@@ -34,6 +34,10 @@
     <PackageReference Include="MarkMpn.Sql4Cds.Engine" Version="10.4.4" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.79.0" />
     <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.79.0" />
+    <!-- Already a transitive dependency of MarkMpn.Sql4Cds.Engine 10.4.4; pinned explicitly
+         to the same version so KeySetPushdown's own parsing stays on the exact grammar SQL 4
+         CDS itself compiles against. -->
+    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="170.64.0" />
   </ItemGroup>
 
 </Project>

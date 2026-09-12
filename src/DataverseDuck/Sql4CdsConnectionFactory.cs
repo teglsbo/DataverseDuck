@@ -119,6 +119,32 @@ public static class Sql4CdsConnectionFactory
         // change here would silently shift every datetime out of UTC and break
         // the guarantee in ADR 0002. A wrong timestamp does not throw.
         connection.UseLocalTimeZone = false;
+
+        BlockDml(connection);
+    }
+
+    /// <summary>
+    /// Refuses every INSERT/UPDATE/DELETE this connection is asked to run (ADR 0014).
+    ///
+    /// dvduck has no feature that writes to Dataverse, so a DML statement reaching this
+    /// connection is always a mistake -- most plausibly a hostile or malformed
+    /// <c>DATAVERSE (...)</c> body, since that source text is otherwise handed to SQL 4
+    /// CDS unmodified. Refusing here, at the engine's own DML confirmation hook, covers
+    /// every shape a write can take (a bare statement, one hidden behind a CTE, one
+    /// produced by <c>UPDATE ... FROM</c>, and so on) because it is the engine's own
+    /// statement classifier deciding what counts as DML, not a SQL text pattern we would
+    /// have to keep re-deriving by hand.
+    ///
+    /// Setting <see cref="System.ComponentModel.CancelEventArgs.Cancel"/> makes the engine
+    /// throw its own <c>QueryExecutionException</c> ("INSERT/UPDATE/DELETE cancelled by
+    /// user") from the node that was about to run the write, before any request reaches
+    /// Dataverse.
+    /// </summary>
+    private static void BlockDml(Sql4CdsConnection connection)
+    {
+        connection.PreInsert += (_, e) => e.Cancel = true;
+        connection.PreUpdate += (_, e) => e.Cancel = true;
+        connection.PreDelete += (_, e) => e.Cancel = true;
     }
 
     /// <summary>

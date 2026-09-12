@@ -6,7 +6,8 @@ Each one states what was decided, what was rejected, and — importantly — the
 Where a decision rests on how a library actually behaves rather than how it is
 documented, the ADR cites a spike in [`../../spikes`](../../spikes) that measured it.
 Measured facts that are not themselves decisions live in
-[`../sql4cds-behaviour.md`](../sql4cds-behaviour.md).
+[`../sql4cds-behaviour.md`](../sql4cds-behaviour.md) -- including the engine's write path,
+covered by [ADR 0014](0014-refuse-dml-and-unbatchable-key-queries.md).
 
 | ADR | Decision | Status |
 |---|---|---|
@@ -23,6 +24,7 @@ Measured facts that are not themselves decisions live in
 | [0011](0011-duckdb-remains-the-orchestrator.md) | DuckDB remains the orchestrator; do not invert the stack under SQL 4 CDS | Accepted |
 | [0012](0012-duckdb-v2-api-window.md) | DuckDB v2.0 exposes optimiser-time filters, not ADR 0007's init-time filter set | Proposed |
 | [0013](0013-persist-the-device-code-token-cache.md) | Persist the device-code token cache to disk | Accepted |
+| [0014](0014-refuse-dml-and-unbatchable-key-queries.md) | Refuse DML at the connection, and unbatchable key queries at the plan | Accepted |
 
 ## Why there is no CHANGELOG
 

@@ -96,19 +96,32 @@ public sealed class DataverseCache
     /// The inner query runs locally; its results are inlined as literals and
     /// sent in batches, so a large table is filtered server-side rather than
     /// pulled across and joined here.
+    ///
+    /// Each batch runs the outer statement in full and appends its rows into
+    /// <paramref name="tableName"/>, so a <c>{{ }}</c>-bearing statement must be a
+    /// plain row-returning SELECT: DISTINCT, TOP, and GROUP BY would each apply
+    /// per batch rather than across the full key set (see
+    /// <see cref="KeySetPushdown.ValidateBatchable"/>). Apply those to the cached
+    /// result afterwards instead.
     /// </param>
     /// <param name="tableName">Destination table. Replaced if it exists.</param>
     /// <exception cref="PlanNotFoldedException">
     /// The plan does more local work than <see cref="FoldingPolicy"/> permits.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// A <c>{{ }}</c>-bearing statement has DISTINCT, TOP, or GROUP BY at its
+    /// outermost level.
     /// </exception>
     public CacheResult Cache(string sql, string tableName, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sql);
         DuckDbIdentifier.Validate(tableName);
 
-        return KeySetPushdown.FindKeyQuery(sql) is { } keyQuery
-            ? CacheMatching(keyQuery, sql, tableName, cancellationToken)
-            : CacheOne(sql, tableName, plan: null, cancellationToken);
+        if (KeySetPushdown.FindKeyQuery(sql) is not { } keyQuery)
+            return CacheOne(sql, tableName, plan: null, cancellationToken);
+
+        KeySetPushdown.ValidateBatchable(keyQuery);
+        return CacheMatching(keyQuery, sql, tableName, cancellationToken);
     }
 
     /// <summary>
