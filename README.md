@@ -32,6 +32,21 @@ Only the result set crosses the wire, then lands in DuckDB via the Appender
 
 See [`docs/adr`](docs/adr) for why this design and not the alternatives.
 
+## Decisions are written down
+
+Fourteen [architecture decision records](docs/adr) cover the choices that would be
+expensive to reverse. Each states what was chosen, **what was rejected and why**, and
+what the decision costs in both directions.
+
+Where a decision depends on how a library actually behaves rather than how it is
+documented, the ADR cites a [spike](#spikes) that measured it — the DuckDB Appender's
+type support, SQL 4 CDS's folding, timestamp handling across the seam, and service
+protection limits were all established by experiment, not assumption. Several turned out
+to contradict the documentation.
+
+So if something here looks wrong, start with the ADR. It is usually deliberate, and the
+reasoning — including the case against it — will say so.
+
 ## Status
 
 Working end to end against a real Dataverse environment.
@@ -135,7 +150,7 @@ debugging session to trace, so consumers are told at build time instead of at ru
 Requires .NET 10.
 
 ```bash
-dotnet test          # 432 tests, no tenant required
+dotnet test          # 443 tests, no tenant required
 ```
 
 ### Do you need a Dataverse connection at all?
@@ -611,7 +626,7 @@ src/DataverseDuck/          Library
   Metadata/                 Snapshot capture, storage and offline cache
 src/DataverseDuck.Cli/      'dvduck' command line tool
   Repl*.cs                  Interactive session, statement loop and terminal table
-tests/DataverseDuck.Tests/  406 tests, no tenant required
+tests/DataverseDuck.Tests/  443 tests, no tenant required
 spikes/                     Throwaway experiments that produced the evidence
 docs/environment-setup.md   Getting headless access to Dataverse
 docs/large-tables.md        Measured limits, and where key-set pushdown stops paying
