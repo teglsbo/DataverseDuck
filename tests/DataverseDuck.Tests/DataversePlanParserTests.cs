@@ -161,6 +161,80 @@ public class DataversePlanParserTests
     }
 
     [Fact]
+    public void DoesNotTreatANameInsideAStringLiteralAsAReference()
+    {
+        var plan = DataversePlanParser.Parse("""
+            WITH crm_contact AS DATAVERSE (
+                SELECT contactid FROM contact WHERE contactid IN {{SELECT id FROM t WHERE category = 'logs'}}
+            ),
+            logs AS DATAVERSE (SELECT id FROM t)
+            SELECT 1
+            """);
+
+        Assert.Equal(["crm_contact", "logs"], plan.Steps.Select(s => s.Name));
+    }
+
+    [Fact]
+    public void DoesNotTreatAColumnOrAliasNameAsATableReference()
+    {
+        // Regression. MentionsRelation must look at what comes after FROM/JOIN,
+        // not every word in the key query -- a later step coincidentally named
+        // the same as a selected column is not a reference to that step.
+        var plan = DataversePlanParser.Parse("""
+            WITH crm_contact AS DATAVERSE (
+                SELECT contactid FROM contact WHERE contactid IN {{SELECT id FROM logs}}
+            ),
+            id AS DATAVERSE (SELECT id FROM t)
+            SELECT 1
+            """);
+
+        Assert.Equal(["crm_contact", "id"], plan.Steps.Select(s => s.Name));
+    }
+
+    [Fact]
+    public void TreatsAQuotedIdentifierAfterFromAsAReference()
+    {
+        var error = Assert.Throws<FormatException>(() => DataversePlanParser.Parse("""
+            WITH crm_contact AS DATAVERSE (
+                SELECT contactid FROM contact WHERE contactid IN {{SELECT id FROM "later_source"}}
+            ),
+            later_source AS DATAVERSE (SELECT id FROM t)
+            SELECT 1
+            """));
+
+        Assert.Contains("comes later", error.Message);
+        Assert.Contains("later_source", error.Message);
+    }
+
+    [Fact]
+    public void TreatsABracketedIdentifierAfterFromAsAReference()
+    {
+        var error = Assert.Throws<FormatException>(() => DataversePlanParser.Parse("""
+            WITH crm_contact AS DATAVERSE (
+                SELECT contactid FROM contact WHERE contactid IN {{SELECT id FROM [later_source]}}
+            ),
+            later_source AS DATAVERSE (SELECT id FROM t)
+            SELECT 1
+            """));
+
+        Assert.Contains("comes later", error.Message);
+        Assert.Contains("later_source", error.Message);
+    }
+
+    [Fact]
+    public void OrdinaryCteKeepsItsColumnList()
+    {
+        var plan = DataversePlanParser.Parse("""
+            WITH local(id) AS (SELECT 1),
+                 crm_contact AS DATAVERSE (SELECT contactid FROM contact)
+            SELECT * FROM local JOIN crm_contact USING (id)
+            """);
+
+        Assert.Single(plan.Steps);
+        Assert.Contains("local(id) AS (SELECT 1)", plan.FinalSql);
+    }
+
+    [Fact]
     public void RefusesRecursive()
     {
         var error = Assert.Throws<FormatException>(() =>
@@ -170,9 +244,33 @@ public class DataversePlanParserTests
     }
 
     [Fact]
-    public void RefusesAWithBlockThatFetchesNothing()
+    public void AnOrdinaryRecursiveCteWithNoCustomStepsIsNotACustomPlan()
+    {
+        // Regression. A caller that parses arbitrary SQL with this parser to
+        // detect a custom plan (rather than to build one) must be able to
+        // tell an ordinary WITH RECURSIVE CTE apart from a malformed custom
+        // plan, so it falls through the same way a plain WITH-only CTE does,
+        // not rejected just for using RECURSIVE.
+        var error = Assert.Throws<NoCustomStepsException>(() =>
+            DataversePlanParser.Parse(
+                "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 5) SELECT * FROM t"));
+
+        Assert.Contains("nothing to bring in", error.Message);
+    }
+
+    [Fact]
+    public void RefusesAColumnListOnADataverseEntry()
     {
         var error = Assert.Throws<FormatException>(() =>
+            DataversePlanParser.Parse("WITH crm(id) AS DATAVERSE (SELECT contactid FROM contact) SELECT id FROM crm"));
+
+        Assert.Contains("column list", error.Message);
+    }
+
+    [Fact]
+    public void RefusesAWithBlockThatFetchesNothing()
+    {
+        var error = Assert.Throws<NoCustomStepsException>(() =>
             DataversePlanParser.Parse("WITH a AS (SELECT 1) SELECT * FROM a"));
 
         Assert.Contains("nothing to bring in", error.Message);
@@ -425,5 +523,42 @@ public class PlanEndToEndTests : IDisposable
         Assert.True(rows.Read());
         Assert.Equal("Account 8", rows.GetString(0));
         Assert.False(rows.Read());
+    }
+
+    [Fact]
+    public void Custom_step_and_ordinary_cte_name_collision_is_rejected()
+    {
+        var act = () => DataversePlanParser.Parse(
+            "WITH crm AS DATAVERSE (SELECT contactid FROM contact), crm AS (SELECT 1) SELECT * FROM crm");
+
+        var error = Assert.Throws<FormatException>(act);
+        Assert.Contains("defined twice", error.Message);
+    }
+
+    [Fact]
+    public void Quoted_ordinary_cte_name_is_preserved()
+    {
+        var plan = DataversePlanParser.Parse(
+            "WITH \"busy cte\" AS (SELECT 1 AS value), crm AS DATAVERSE (SELECT contactid FROM contact) SELECT * FROM \"busy cte\"");
+
+        Assert.Contains("\"busy cte\" AS", plan.FinalSql);
+    }
+
+    [Fact]
+    public void Bracket_identifier_can_contain_a_closing_parenthesis()
+    {
+        var plan = DataversePlanParser.Parse(
+            "WITH crm AS DATAVERSE (SELECT [name)] FROM account) SELECT * FROM crm");
+
+        Assert.Equal("SELECT [name)] FROM account", plan.Steps[0].Body);
+    }
+
+    [Fact]
+    public void Escaped_quoted_source_name_is_unescaped_and_preserved()
+    {
+        var plan = DataversePlanParser.Parse(
+            "WITH \"a\"\"b\" AS DATAVERSE (SELECT contactid FROM contact) SELECT * FROM \"a\"\"b\"");
+
+        Assert.Equal("a\"b", plan.Steps[0].Name);
     }
 }

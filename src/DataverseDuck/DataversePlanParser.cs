@@ -27,6 +27,18 @@ public sealed record PlanStep(PlanStepKind Kind, string Name, string Body);
 public sealed record DataversePlan(IReadOnlyList<PlanStep> Steps, string FinalSql);
 
 /// <summary>
+/// The <c>WITH</c> block parses fine as SQL, but names no JSON or DATAVERSE
+/// entry at all -- an ordinary CTE query, not a custom plan.
+///
+/// Distinct from other <see cref="FormatException"/>s this parser throws:
+/// a caller that runs arbitrary SQL through this parser to detect a custom
+/// plan (rather than to build one) needs to tell "not a custom plan" apart
+/// from "is a custom plan, but a malformed one", and a shared base type --
+/// or a text search over the message -- cannot do that reliably.
+/// </summary>
+public sealed class NoCustomStepsException(string message) : FormatException(message);
+
+/// <summary>
 /// Reads a <c>WITH</c> block that names its own sources:
 /// <code>
 /// WITH logs        AS JSON ('webchat/*.json'),
@@ -73,15 +85,16 @@ public static class DataversePlanParser
 
         var afterWith = position;
         SkipTrivia(sql, ref afterWith);
-        if (ReadKeyword(sql, ref afterWith, "RECURSIVE"))
+        var recursiveAt = afterWith;
+        var isRecursive = ReadKeyword(sql, ref afterWith, "RECURSIVE");
+        if (isRecursive)
         {
-            throw new FormatException(
-                "WITH RECURSIVE is not supported here. A recursive CTE cannot describe a " +
-                "sequence of fetches; write them as separate entries.");
+            position = afterWith;
         }
 
         var steps = new List<PlanStep>();
         var plainCtes = new List<string>();
+        var plainCteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         while (true)
         {
@@ -89,6 +102,17 @@ public static class DataversePlanParser
 
             var nameAt = position;
             var name = ReadName(sql, ref position);
+            SkipTrivia(sql, ref position);
+
+            // Ordinary CTEs may declare a column list before AS, e.g. local(id) AS (...).
+            var columnListAt = position;
+            if (position < sql.Length && sql[position] == '(')
+            {
+                ReadBalanced(sql, ref position);
+            }
+
+            var hasColumnList = position > columnListAt;
+            var nameToken = sql[nameAt..position];
             SkipTrivia(sql, ref position);
 
             if (!ReadKeyword(sql, ref position, "AS"))
@@ -123,6 +147,13 @@ public static class DataversePlanParser
 
             if (kind is { } stepKind)
             {
+                if (hasColumnList)
+                {
+                    throw PlanSource.Error(sql, nameAt,
+                        $"'{name}' is a {stepKind.ToString().ToUpperInvariant()} entry, so it cannot declare " +
+                        "a column list -- name the columns in the SELECT instead");
+                }
+
                 if (hint.Length > 0)
                 {
                     throw PlanSource.Error(sql, nameAt,
@@ -138,7 +169,8 @@ public static class DataversePlanParser
             }
             else
             {
-                plainCtes.Add($"{name} AS {hint}{(hint.Length > 0 ? " " : "")}({body})");
+                plainCteNames.Add(name);
+                plainCtes.Add($"{nameToken} AS {hint}{(hint.Length > 0 ? " " : "")}({body})");
             }
 
             SkipTrivia(sql, ref position);
@@ -153,13 +185,21 @@ public static class DataversePlanParser
 
         if (steps.Count == 0)
         {
-            throw new FormatException(
+            throw new NoCustomStepsException(
                 "This WITH block has no JSON or DATAVERSE entries, so there is nothing to bring in. " +
                 "Run it as an ordinary query instead.");
         }
 
+        if (isRecursive)
+        {
+            throw PlanSource.Error(sql, recursiveAt,
+                "WITH RECURSIVE is not supported here. A recursive CTE cannot describe a " +
+                "sequence of fetches; write them as separate entries.");
+        }
+
         RejectDuplicates(steps);
-        RejectForwardReferences(steps, plainCtes);
+        RejectNameCollisions(steps, plainCteNames);
+        RejectForwardReferences(steps, plainCteNames);
 
         var tail = sql[position..].Trim();
         if (tail.Length == 0)
@@ -181,7 +221,7 @@ public static class DataversePlanParser
         }
 
         var finalSql = plainCtes.Count > 0
-            ? $"WITH {string.Join(",\n     ", plainCtes)}\n{tail}"
+            ? $"WITH {string.Join(",\n     ", plainCtes.Select(QuotePlainCte))}\n{tail}"
             : tail;
 
         return new DataversePlan(steps, finalSql);
@@ -251,12 +291,20 @@ public static class DataversePlanParser
     /// read an ordinary CTE, nor an entry below it. Both would otherwise surface
     /// as a confusing "table not found".
     /// </summary>
-    private static void RejectForwardReferences(List<PlanStep> steps, List<string> plainCtes)
+    private static void RejectNameCollisions(List<PlanStep> steps, HashSet<string> plainCteNames)
     {
-        var plainNames = plainCtes
-            .Select(cte => cte[..cte.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase)].Trim())
-            .ToList();
+        foreach (var step in steps)
+        {
+            if (plainCteNames.Contains(step.Name))
+            {
+                throw new FormatException(
+                    $"'{step.Name}' is defined twice: once as a custom source and once as an ordinary CTE.");
+            }
+        }
+    }
 
+    private static void RejectForwardReferences(List<PlanStep> steps, IReadOnlyCollection<string> plainCteNames)
+    {
         for (var i = 0; i < steps.Count; i++)
         {
             if (steps[i].Kind != PlanStepKind.Dataverse)
@@ -270,9 +318,9 @@ public static class DataversePlanParser
                 continue;
             }
 
-            foreach (var plain in plainNames)
+            foreach (var plain in plainCteNames)
             {
-                if (MentionsWord(keyQuery.Sql, plain))
+                if (MentionsRelation(keyQuery.Sql, plain))
                 {
                     throw new FormatException(
                         $"'{steps[i].Name}' reads '{plain}' inside {{{{ }}}}, but '{plain}' is an " +
@@ -283,7 +331,7 @@ public static class DataversePlanParser
 
             for (var later = i; later < steps.Count; later++)
             {
-                if (MentionsWord(keyQuery.Sql, steps[later].Name))
+                if (MentionsRelation(keyQuery.Sql, steps[later].Name))
                 {
                     var problem = later == i
                         ? $"'{steps[i].Name}' reads itself inside {{{{ }}}}."
@@ -298,11 +346,13 @@ public static class DataversePlanParser
     }
 
     /// <summary>
-    /// Whole-word, case-insensitive search for <paramref name="word"/>, skipping over
-    /// string/identifier literals and comments so that a name mentioned only inside one
-    /// of those is not mistaken for an actual reference.
+    /// Looks for <paramref name="name"/> used as a relation, i.e. right after
+    /// FROM or JOIN -- quoted, bracketed or plain -- so that a later step
+    /// merely sharing a name with a selected column or alias does not count
+    /// as a reference to it. String literals and comments are skipped so a
+    /// name mentioned only inside them is not mistaken for FROM/JOIN either.
     /// </summary>
-    private static bool MentionsWord(string text, string word)
+    private static bool MentionsRelation(string text, string name)
     {
         var position = 0;
 
@@ -310,7 +360,7 @@ public static class DataversePlanParser
         {
             var c = text[position];
 
-            if (c == '\'' || c == '"')
+            if (c == '\'')
             {
                 ReadQuoted(text, ref position);
                 continue;
@@ -330,12 +380,34 @@ public static class DataversePlanParser
                     position++;
                 }
 
-                if (position - start == word.Length &&
-                    string.Compare(text, start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0)
+                var word = text[start..position];
+                var isRelationKeyword =
+                    string.Equals(word, "FROM", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(word, "JOIN", StringComparison.OrdinalIgnoreCase);
+
+                if (isRelationKeyword)
                 {
-                    return true;
+                    SkipTrivia(text, ref position);
+
+                    if (ReadRelationName(text, ref position) is { } relation &&
+                        string.Equals(relation, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
                 }
 
+                continue;
+            }
+
+            if (c == '"')
+            {
+                ReadQuoted(text, ref position);
+                continue;
+            }
+
+            if (c == '[')
+            {
+                ReadBracketed(text, ref position);
                 continue;
             }
 
@@ -345,21 +417,66 @@ public static class DataversePlanParser
         return false;
     }
 
+    /// <summary>
+    /// Reads the identifier right after FROM/JOIN, if any is there -- quoted,
+    /// bracketed or plain. Does not resolve a schema-qualified name past its
+    /// first part; that is enough to tell a real reference from a
+    /// coincidental column or alias name apart.
+    /// </summary>
+    private static string? ReadRelationName(string text, ref int position)
+    {
+        if (position >= text.Length)
+        {
+            return null;
+        }
+
+        if (text[position] == '"')
+        {
+            var token = ReadQuoted(text, ref position);
+            return token[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal);
+        }
+
+        if (text[position] == '[')
+        {
+            var token = ReadBracketed(text, ref position);
+            return token[1..^1].Replace("]]", "]", StringComparison.Ordinal);
+        }
+
+        if (IsNameChar(text[position]))
+        {
+            var start = position;
+            while (position < text.Length && IsNameChar(text[position]))
+            {
+                position++;
+            }
+
+            return text[start..position];
+        }
+
+        return null;
+    }
+
     private static bool IsNameChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    /// <summary>
+    /// The name portion of a plain CTE entry can pick up trailing trivia (a
+    /// space before AS, or before a column list check) while it is being
+    /// assembled; trim it back down before it reaches the final SQL.
+    /// </summary>
+    private static string QuotePlainCte(string cte)
+    {
+        var separator = cte.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+        var name = cte[..separator].Trim();
+        var body = cte[separator..];
+        return $"{name}{body}";
+    }
 
     private static string ReadName(string sql, ref int position)
     {
         if (position < sql.Length && sql[position] == '"')
         {
-            var closing = sql.IndexOf('"', position + 1);
-            if (closing < 0)
-            {
-                throw PlanSource.Error(sql, position, "Unterminated quoted name in the WITH list");
-            }
-
-            var quoted = sql[(position + 1)..closing];
-            position = closing + 1;
-            return quoted;
+            var token = ReadQuoted(sql, ref position);
+            return token[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal);
         }
 
         var start = position;
@@ -427,6 +544,12 @@ public static class DataversePlanParser
                 continue;
             }
 
+            if (c == '[')
+            {
+                body.Append(ReadBracketed(sql, ref position));
+                continue;
+            }
+
             position++;
 
             if (c == '(')
@@ -491,6 +614,32 @@ public static class DataversePlanParser
         position + 1 < sql.Length &&
         ((sql[position] == '-' && sql[position + 1] == '-') ||
          (sql[position] == '/' && sql[position + 1] == '*'));
+
+    private static string ReadBracketed(string sql, ref int position)
+    {
+        var start = position;
+        position++;
+
+        while (position < sql.Length)
+        {
+            if (sql[position] != ']')
+            {
+                position++;
+                continue;
+            }
+
+            if (position + 1 < sql.Length && sql[position + 1] == ']')
+            {
+                position += 2;
+                continue;
+            }
+
+            position++;
+            return sql[start..position];
+        }
+
+        throw PlanSource.Error(sql, start, "Unterminated bracketed identifier in the WITH list");
+    }
 
     private static void SkipTrivia(string sql, ref int position)
     {

@@ -288,7 +288,7 @@ public class ReplPlanParsingTests
     [Fact]
     public void APlainCteIsStillRefusedWithoutAFinalQuery()
     {
-        Assert.Throws<FormatException>(() =>
+        Assert.Throws<NoCustomStepsException>(() =>
             DataversePlanParser.Parse("WITH x AS (SELECT 1)", requireFinalQuery: false));
     }
 }
