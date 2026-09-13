@@ -19,6 +19,9 @@ public interface IDataverseQuerySource
     /// </summary>
     PlanAnalysis? Analyze(string sql);
 
+    /// <summary>As <see cref="Analyze(string)"/>, but cancellable while compiling.</summary>
+    PlanAnalysis? Analyze(string sql, CancellationToken cancellationToken) => Analyze(sql);
+
     /// <summary>
     /// Executes the statement and hands the reader to <paramref name="read"/>.
     ///
@@ -27,4 +30,7 @@ public interface IDataverseQuerySource
     /// retained beyond the callback.
     /// </summary>
     T Query<T>(string sql, Func<DbDataReader, T> read);
+
+    /// <summary>As <see cref="Query{T}(string, Func{DbDataReader, T})"/>, but cancellable while executing.</summary>
+    T Query<T>(string sql, Func<DbDataReader, T> read, CancellationToken cancellationToken) => Query(sql, read);
 }

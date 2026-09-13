@@ -120,7 +120,7 @@ public sealed class EnvironmentDoctor(DataverseOptions options)
         {
             return (CheckResult.Fail(name, $"{e.ErrorCode}: {FirstLine(e.Message)}", InterpretMsalError(e)), null);
         }
-        catch (Exception e)
+        catch (Exception e) when (e is not OperationCanceledException)
         {
             return (CheckResult.Fail(name, FirstLine(e.Message),
                 "Check network access to login.microsoftonline.com."), null);

@@ -97,6 +97,20 @@ public static class DataverseThrottling
     {
         for (var current = exception; current is not null; current = current.InnerException)
         {
+            // The SDK's own retry loop can surface a batch failure as an AggregateException
+            // wrapping the per-request faults rather than a single fault in the InnerException
+            // chain; walk into it explicitly or a wrapped Retry-After is never found.
+            if (current is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    if (RetryAfter(inner) is { } nested)
+                    {
+                        return nested;
+                    }
+                }
+            }
+
             if (current is FaultException<OrganizationServiceFault> { Detail: not null } fault &&
                 fault.Detail.ErrorDetails.TryGetValue(RetryAfterKey, out var value))
             {
@@ -131,20 +145,24 @@ public static class DataverseThrottling
         return kind switch
         {
             ThrottleKind.RequestCount =>
-                "Dataverse throttled this: over 6,000 requests in 5 minutes. The SDK already " +
-                "retried and still could not finish. Narrow the query so fewer pages are " +
-                "fetched, or select fewer columns so each page carries more rows." + wait,
+                "Dataverse throttled this: too many requests in the sliding window (Microsoft's " +
+                "documented default is 6,000 per 5 minutes, but the actual limit is set per " +
+                "environment and can differ). The SDK already retried and still could not finish. " +
+                "Narrow the query so fewer pages are fetched, or select fewer columns so each " +
+                "page carries more rows." + wait,
 
             ThrottleKind.ExecutionTime =>
-                "Dataverse throttled this: over 20 minutes of combined server execution time " +
-                "in a 5-minute window. This usually means the query is expensive rather than " +
-                "merely large. Add a filter Dataverse can index, or split the load by date " +
-                "range and cache each slice." + wait,
+                "Dataverse throttled this: too much combined server execution time in the sliding " +
+                "window (Microsoft's documented default is 20 minutes per 5 minutes, but the " +
+                "actual limit is set per environment and can differ). This usually means the " +
+                "query is expensive rather than merely large. Add a filter Dataverse can index, " +
+                "or split the load by date range and cache each slice." + wait,
 
             ThrottleKind.Concurrency =>
-                "Dataverse throttled this: too many concurrent requests (limit around 52). " +
-                "Lower MaxDegreeOfParallelism on the SQL 4 CDS connection, or stop running " +
-                "several caches at once." + wait,
+                "Dataverse throttled this: too many concurrent requests (Microsoft's documented " +
+                "default is around 52, but the actual limit is set per environment and can " +
+                "differ). Lower MaxDegreeOfParallelism on the SQL 4 CDS connection, or stop " +
+                "running several caches at once." + wait,
 
             _ => null,
         };

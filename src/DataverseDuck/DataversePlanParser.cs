@@ -297,20 +297,49 @@ public static class DataversePlanParser
         }
     }
 
+    /// <summary>
+    /// Whole-word, case-insensitive search for <paramref name="word"/>, skipping over
+    /// string/identifier literals and comments so that a name mentioned only inside one
+    /// of those is not mistaken for an actual reference.
+    /// </summary>
     private static bool MentionsWord(string text, string word)
     {
-        var index = text.IndexOf(word, StringComparison.OrdinalIgnoreCase);
-        while (index >= 0)
+        var position = 0;
+
+        while (position < text.Length)
         {
-            var before = index == 0 || !IsNameChar(text[index - 1]);
-            var afterIndex = index + word.Length;
-            var after = afterIndex >= text.Length || !IsNameChar(text[afterIndex]);
-            if (before && after)
+            var c = text[position];
+
+            if (c == '\'' || c == '"')
             {
-                return true;
+                ReadQuoted(text, ref position);
+                continue;
             }
 
-            index = text.IndexOf(word, index + 1, StringComparison.OrdinalIgnoreCase);
+            if (IsCommentStart(text, position))
+            {
+                SkipTrivia(text, ref position);
+                continue;
+            }
+
+            if (IsNameChar(c))
+            {
+                var start = position;
+                while (position < text.Length && IsNameChar(text[position]))
+                {
+                    position++;
+                }
+
+                if (position - start == word.Length &&
+                    string.Compare(text, start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0)
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            position++;
         }
 
         return false;

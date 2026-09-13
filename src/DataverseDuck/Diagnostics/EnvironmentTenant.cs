@@ -46,10 +46,18 @@ public static partial class EnvironmentTenant
 
             return values.Select(Extract).FirstOrDefault(guid => guid is not null);
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or UriFormatException)
+        catch (Exception e) when (e is HttpRequestException or UriFormatException)
         {
             // Discovery is a diagnostic aid, not a gate. If the network says no,
             // the caller still has its own error to report.
+            return null;
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // An HttpClient-internal timeout (e.g. the default Timeout above
+            // elapsing), not the caller asking to stop -- same diagnostic
+            // fallback as any other network failure. A caller-requested
+            // cancellation is left to propagate rather than being swallowed here.
             return null;
         }
         finally

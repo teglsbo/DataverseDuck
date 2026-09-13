@@ -1,5 +1,6 @@
 using System.ServiceModel;
 using MarkMpn.Sql4Cds.Engine;
+using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Metadata;
 
 namespace DataverseDuck.Metadata;
@@ -12,6 +13,16 @@ public sealed class SnapshotMetadataCache : IAttributeMetadataCache
 {
     private readonly MetadataSnapshot _snapshot;
     private readonly string[] _recycleBinEntities;
+
+    /// <summary>
+    /// A distinguishing, non-zero, non-throttling error code. The live
+    /// AttributeMetadataCache leaves <c>Detail.ErrorCode</c> at its default of 0
+    /// when it wraps an unrelated failure (auth, transport, provider), so
+    /// DataverseSchemaMapper treats ErrorCode 0 as "not a genuine unknown-entity
+    /// fault" and propagates it instead of falling back. This cache's own fault
+    /// must therefore also avoid 0 to be recognised the same way offline.
+    /// </summary>
+    private const int UnknownEntityErrorCode = -1;
 
     public SnapshotMetadataCache(MetadataSnapshot snapshot, string[]? recycleBinEntities = null)
     {
@@ -29,11 +40,20 @@ public sealed class SnapshotMetadataCache : IAttributeMetadataCache
                 return metadata;
 
             // SQL 4 CDS expects a FaultException for unknown entities, matching
-            // what the live platform returns.
-            throw new FaultException(
-                $"Entity '{name ?? "(null)"}' is not in the metadata snapshot. " +
+            // what the live platform returns. The generic form -- and the
+            // "not found" wording -- matter too: DataverseSchemaMapper only
+            // recognizes a FaultException<OrganizationServiceFault> with a
+            // non-zero, non-throttling ErrorCode and a "not found"/"does not
+            // exist" message as an unknown entity, the same shape
+            // AttributeMetadataCache's fault takes.
+            var message =
+                $"Entity '{name ?? "(null)"}' was not found: it is not in the metadata snapshot. " +
                 $"Re-capture the snapshot including this table. " +
-                $"Known: {string.Join(", ", _snapshot.LogicalNames.Order())}");
+                $"Known: {string.Join(", ", _snapshot.LogicalNames.Order())}";
+
+            throw new FaultException<OrganizationServiceFault>(
+                new OrganizationServiceFault { Message = message, ErrorCode = UnknownEntityErrorCode },
+                new FaultReason(message));
         }
     }
 
@@ -42,8 +62,13 @@ public sealed class SnapshotMetadataCache : IAttributeMetadataCache
         get
         {
             var match = _snapshot.Entities.FirstOrDefault(e => e.ObjectTypeCode == otc);
-            return match ?? throw new FaultException(
-                $"No entity with object type code {otc} in the metadata snapshot.");
+            if (match is not null)
+                return match;
+
+            var message = $"No entity with object type code {otc} was found in the metadata snapshot.";
+            throw new FaultException<OrganizationServiceFault>(
+                new OrganizationServiceFault { Message = message, ErrorCode = UnknownEntityErrorCode },
+                new FaultReason(message));
         }
     }
 

@@ -29,6 +29,22 @@ public sealed class Sql4CdsQuerySource(
         return _analyzer.Analyze(command);
     }
 
+    public PlanAnalysis? Analyze(string sql, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = sql;
+        using var registration = cancellationToken.Register(command.Cancel);
+
+        // Register only arms command.Cancel() for what runs below; a
+        // cancellation arriving in the gap between the check above and here
+        // has nothing to interrupt yet, so it must be checked again.
+        cancellationToken.ThrowIfCancellationRequested();
+        return _analyzer.Analyze(command);
+    }
+
     public T Query<T>(string sql, Func<DbDataReader, T> read)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sql);
@@ -37,6 +53,21 @@ public sealed class Sql4CdsQuerySource(
         using var command = _connection.CreateCommand();
         command.CommandText = sql;
 
+        using var reader = command.ExecuteReader();
+        return read(reader);
+    }
+
+    public T Query<T>(string sql, Func<DbDataReader, T> read, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        ArgumentNullException.ThrowIfNull(read);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = sql;
+        using var registration = cancellationToken.Register(command.Cancel);
+
+        cancellationToken.ThrowIfCancellationRequested();
         using var reader = command.ExecuteReader();
         return read(reader);
     }

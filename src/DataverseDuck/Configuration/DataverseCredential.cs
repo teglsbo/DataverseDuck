@@ -145,10 +145,12 @@ public sealed class CertificateCredential(X509Certificate2 certificate, string s
         X509Certificate2 certificate;
         try
         {
-            certificate = X509CertificateLoader.LoadPkcs12FromFile(
-                path,
-                password,
-                X509KeyStorageFlags.EphemeralKeySet);
+            certificate = LooksLikePem(path)
+                ? LoadPem(path, password)
+                : X509CertificateLoader.LoadPkcs12FromFile(
+                    path,
+                    password,
+                    X509KeyStorageFlags.EphemeralKeySet);
         }
         catch (CryptographicException e)
         {
@@ -171,6 +173,36 @@ public sealed class CertificateCredential(X509Certificate2 certificate, string s
         credential = new CertificateCredential(certificate, path);
         error = null;
         return true;
+    }
+
+    /// <summary>A PEM file is ASCII text starting with the standard header; PKCS#12 is binary.</summary>
+    private static bool LooksLikePem(string path)
+    {
+        Span<byte> header = stackalloc byte[11];
+        using var stream = File.OpenRead(path);
+        return stream.Read(header) == header.Length &&
+            System.Text.Encoding.ASCII.GetString(header) == "-----BEGIN ";
+    }
+
+    /// <summary>
+    /// Loads a certificate and private key from a PEM file. Both may be
+    /// concatenated in the same file (the common OpenSSL-style bundle); when
+    /// they are, <see cref="X509Certificate2.CreateFromPemFile"/> finds the
+    /// key in the same file if no second path is given.
+    ///
+    /// The certificate that method returns cannot always be used like an
+    /// ordinary one (for example, it may not re-export). Round-tripping it
+    /// through PKCS#12 gives back a normal certificate + key pair, the same
+    /// shape <see cref="X509CertificateLoader.LoadPkcs12FromFile"/> produces.
+    /// </summary>
+    private static X509Certificate2 LoadPem(string path, string? password)
+    {
+        using var pem = string.IsNullOrEmpty(password)
+            ? X509Certificate2.CreateFromPemFile(path)
+            : X509Certificate2.CreateFromEncryptedPemFile(path, password);
+
+        return X509CertificateLoader.LoadPkcs12(
+            pem.Export(X509ContentType.Pkcs12), password: null, X509KeyStorageFlags.EphemeralKeySet);
     }
 
     /// <summary>
@@ -265,10 +297,9 @@ public sealed class DeviceCodeCredential(string? username = null, Func<DeviceCod
     /// </summary>
     public string? Username { get; } = string.IsNullOrWhiteSpace(username) ? null : username.Trim();
 
-    public override string Describe() =>
-        Username is null
-            ? "device-code (interactive sign-in, human user)"
-            : $"device-code (interactive sign-in, cached account={Username})";
+    // Username is used only to pick a cached account (see above), not reported here: it is
+    // personal data, and DataverseOptions.Describe() is documented as safe to log.
+    public override string Describe() => "device-code (interactive sign-in, human user)";
 
     public override async Task<AuthenticationResult> AcquireTokenAsync(
         DataverseOptions options, CancellationToken cancellationToken)
@@ -276,10 +307,7 @@ public sealed class DeviceCodeCredential(string? username = null, Func<DeviceCod
         var app = await GetOrBuildAppAsync(options, cancellationToken);
 
         var accounts = await app.GetAccountsAsync();
-        var existing = Username is null
-            ? accounts.FirstOrDefault()
-            : accounts.FirstOrDefault(a => string.Equals(a.Username, Username, StringComparison.OrdinalIgnoreCase))
-                ?? accounts.FirstOrDefault();
+        var existing = SelectAccount(accounts, Username);
 
         if (existing is not null)
         {
@@ -307,6 +335,19 @@ public sealed class DeviceCodeCredential(string? username = null, Func<DeviceCod
             Console.WriteLine(deviceCode.Message);
             return Task.CompletedTask;
         });
+
+    /// <summary>
+    /// Picks which cached account silent renewal should try first. When no
+    /// username was configured, any cached account is fine -- there is
+    /// nothing to prefer. When one was configured, only an exact match will
+    /// do: falling back to an arbitrary other cached account would silently
+    /// authenticate as the wrong person instead of prompting for the right
+    /// one.
+    /// </summary>
+    internal static IAccount? SelectAccount(IEnumerable<IAccount> accounts, string? username) =>
+        username is null
+            ? accounts.FirstOrDefault()
+            : accounts.FirstOrDefault(a => string.Equals(a.Username, username, StringComparison.OrdinalIgnoreCase));
 
     private async Task<IPublicClientApplication> GetOrBuildAppAsync(
         DataverseOptions options, CancellationToken cancellationToken)

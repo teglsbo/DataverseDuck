@@ -23,6 +23,9 @@ public sealed class SnapshotOnlyOrganizationService : IOrganizationService
         "with no live Dataverse connection. It can compile and run queries " +
         "against a previously cached --db, but it cannot fetch rows from Dataverse.";
 
+    private bool _answeredNameProbe;
+    private bool _answeredLocaleIdProbe;
+
     public Guid Create(Entity entity) => throw new NotSupportedException(Message);
 
     public Entity Retrieve(string entityName, Guid id, ColumnSet columnSet) =>
@@ -48,9 +51,12 @@ public sealed class SnapshotOnlyOrganizationService : IOrganizationService
 
     public EntityCollection RetrieveMultiple(QueryBase query)
     {
-        var name = (query as QueryExpression)?.EntityName ?? (query as FetchExpression)?.Query;
+        if (query is not QueryExpression queryExpression
+            || !string.Equals(queryExpression.EntityName, "organization", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException(Message);
 
-        if (name?.Contains("organization") != true)
+        var column = StartupLocaleLookupColumn(queryExpression);
+        if (column is null || !TryConsumeStartupProbe(column))
             throw new NotSupportedException(Message);
 
         // SQL 4 CDS reads collation/locale from the organization row when it
@@ -62,6 +68,67 @@ public sealed class SnapshotOnlyOrganizationService : IOrganizationService
         org["localeid"] = 1033;
         org["collation"] = "SQL_Latin1_General_CP1_CI_AI";
         return new EntityCollection([org]) { EntityName = "organization" };
+    }
+
+    /// <summary>
+    /// The startup projection shape alone cannot tell SQL 4 CDS's own probe
+    /// apart from an ordinary user query happening to ask for the same single
+    /// column -- both look identical. What does distinguish them: SQL 4 CDS
+    /// asks for each of "name" and "localeid" at most once per connection
+    /// (cached in <c>DataSource.Name</c> and <c>DataSource.DefaultCollation</c>
+    /// respectively), so only the first request for each column is answered;
+    /// any repeat is a real query and is refused like everything else here.
+    /// </summary>
+    private bool TryConsumeStartupProbe(string column)
+    {
+        if (string.Equals(column, "name", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_answeredNameProbe)
+                return false;
+
+            _answeredNameProbe = true;
+            return true;
+        }
+
+        if (_answeredLocaleIdProbe)
+            return false;
+
+        _answeredLocaleIdProbe = true;
+        return true;
+    }
+
+    /// <summary>
+    /// SQL 4 CDS's own start-up probes -- <c>DataSource</c>'s constructor and
+    /// <c>LoadDefaultCollation</c> -- each read the organization row
+    /// unfiltered, asking for exactly one of these two columns and no other
+    /// shape: no WHERE, ORDER BY, JOIN, SELECT *, or TopCount, and never both
+    /// columns together (verified against the real MarkMpn.Sql4Cds.Engine
+    /// DLL, which ships no source or docs). Returns which column matched, or
+    /// null if the shape does not match either probe at all.
+    /// </summary>
+    private static string? StartupLocaleLookupColumn(QueryExpression query)
+    {
+        if (query.ColumnSet.AllColumns
+            || query.TopCount is > 1
+            || query.Criteria.Conditions.Count != 0
+            || query.Criteria.Filters.Count != 0
+            || query.Orders.Count != 0
+            || query.LinkEntities.Count != 0)
+        {
+            return null;
+        }
+
+        var columns = query.ColumnSet.Columns;
+        if (columns.Count != 1)
+            return null;
+
+        if (string.Equals(columns[0], "name", StringComparison.OrdinalIgnoreCase))
+            return "name";
+
+        if (string.Equals(columns[0], "localeid", StringComparison.OrdinalIgnoreCase))
+            return "localeid";
+
+        return null;
     }
 }
 

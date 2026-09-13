@@ -143,7 +143,8 @@ internal sealed class FakeMetadata(params EntityMetadata[] entities) : IAttribut
             var entity = entities.FirstOrDefault(e =>
                 string.Equals(e.LogicalName, name, StringComparison.OrdinalIgnoreCase))
                 ?? throw new FaultException<Microsoft.Xrm.Sdk.OrganizationServiceFault>(
-                    new Microsoft.Xrm.Sdk.OrganizationServiceFault(), new FaultReason($"No entity {name}."));
+                    new Microsoft.Xrm.Sdk.OrganizationServiceFault { ErrorCode = -1 },
+                    new FaultReason($"Entity {name} was not found."));
 
             _loaded.Add(entity.LogicalName);
             return entity;

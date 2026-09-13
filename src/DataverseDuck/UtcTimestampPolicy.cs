@@ -94,17 +94,29 @@ public static class UtcTimestampPolicy
     /// </summary>
     /// <param name="columnExpression">A JSON column holding a timestamp string.</param>
     /// <param name="assumeUtcIfNoOffset">
-    /// When the string carries no offset, TIMESTAMPTZ parsing adopts the session
-    /// timezone. Because Rule 1 pins the session to UTC that is already correct,
-    /// but this makes the intent explicit and survives a stray SET TimeZone.
+    /// When the string carries no offset, TIMESTAMPTZ parsing silently adopts the
+    /// SESSION timezone rather than assuming UTC -- which defeats the assumption the
+    /// moment anything sets a non-UTC session (a stray SET TimeZone). Detected from
+    /// the text itself, so only a string that actually carries an offset goes
+    /// through TIMESTAMPTZ; one that doesn't is read directly as the naive UTC
+    /// instant instead of trusting the session.
     /// </param>
     public static string JsonTimestampToUtc(string columnExpression, bool assumeUtcIfNoOffset = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(columnExpression);
 
-        return assumeUtcIfNoOffset
-            ? $"(TRY_CAST({columnExpression} AS TIMESTAMPTZ) AT TIME ZONE 'UTC')"
-            : $"TRY_CAST({columnExpression} AS TIMESTAMP)";
+        if (!assumeUtcIfNoOffset)
+        {
+            return $"TRY_CAST({columnExpression} AS TIMESTAMP)";
+        }
+
+        const string offsetPattern = "(Z|[+-]\\d{2}:?\\d{2})$";
+        return $"""
+            (CASE WHEN regexp_matches({columnExpression}, '{offsetPattern}')
+                  THEN (TRY_CAST({columnExpression} AS TIMESTAMPTZ) AT TIME ZONE 'UTC')
+                  ELSE TRY_CAST({columnExpression} AS TIMESTAMP)
+             END)
+            """;
     }
 
     /// <summary>

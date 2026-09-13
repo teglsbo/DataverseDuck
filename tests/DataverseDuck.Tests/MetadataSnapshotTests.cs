@@ -174,7 +174,7 @@ public class MetadataSnapshotTests
     {
         var cache = new SnapshotMetadataCache(new MetadataSnapshot([BuildEntity("account", 1)]));
 
-        var ex = Assert.Throws<FaultException>(() => _ = cache["opportunity"]);
+        var ex = Assert.Throws<FaultException<OrganizationServiceFault>>(() => _ = cache["opportunity"]);
         Assert.Contains("opportunity", ex.Message);
         Assert.Contains("account", ex.Message);
     }

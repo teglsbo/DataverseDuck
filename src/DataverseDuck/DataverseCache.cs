@@ -25,7 +25,7 @@ public sealed record CacheResult(
     public long? KeyCount { get; init; }
 
     public override string ToString() =>
-        $"{TableName}: {RowCount:N0} rows in {Elapsed.TotalSeconds:F1}s" +
+        FormattableString.Invariant($"{TableName}: {RowCount:N0} rows in {Elapsed.TotalSeconds:F1}s") +
         (Plan is { FullyFolded: false } ? $" ({Plan.Problems.Count()} operation(s) ran locally)" : string.Empty);
 }
 
@@ -137,15 +137,16 @@ public sealed class DataverseCache
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        var keys = Pushdown.ReadKeys(Connection, keyQuery.Sql);
+        var keys = Pushdown.ReadKeys(Connection, keyQuery.Sql, cancellationToken);
 
-        Log?.Invoke($"{tableName}: {keys.Count:N0} distinct key(s) from the local query");
+        Log?.Invoke(FormattableString.Invariant($"{tableName}: {keys.Count:N0} distinct key(s) from the local query"));
 
         var loader = new DuckDbBulkLoader(Connection);
         using var transaction = Connection.BeginTransaction();
 
         TableMapping? mapping = null;
         var rows = 0L;
+        var processedKeys = 0L;
         PlanAnalysis? firstPlan = null;
 
         if (keys.Count == 0)
@@ -161,7 +162,7 @@ public sealed class DataverseCache
             cancellationToken.ThrowIfCancellationRequested();
 
             var batchSql = keyQuery.Expand(batch);
-            var plan = _source.Analyze(batchSql);
+            var plan = _source.Analyze(batchSql, cancellationToken);
             firstPlan ??= plan;
 
             if (plan is not null)
@@ -182,9 +183,10 @@ public sealed class DataverseCache
                 }
 
                 return loader.LoadInto(reader, mapping, null, cancellationToken);
-            });
+            }, cancellationToken);
 
-            Log?.Invoke($"{tableName}: {rows:N0} rows after {Math.Min(rows, batch.Count)} of {keys.Count:N0} keys");
+            processedKeys += batch.Count;
+            Log?.Invoke(FormattableString.Invariant($"{tableName}: {rows:N0} rows after {processedKeys:N0} of {keys.Count:N0} keys"));
         }
 
         if (mapping is null)
@@ -196,7 +198,7 @@ public sealed class DataverseCache
                 mapping = Mapper.MapReader(reader, tableName);
                 loader.CreateTable(mapping, transaction);
                 return 0L;
-            });
+            }, cancellationToken);
         }
 
         stopwatch.Stop();
@@ -218,7 +220,7 @@ public sealed class DataverseCache
         PlanAnalysis? plan,
         CancellationToken cancellationToken)
     {
-        plan ??= _source.Analyze(sql);
+        plan ??= _source.Analyze(sql, cancellationToken);
 
         if (plan is not null)
         {
@@ -244,11 +246,11 @@ public sealed class DataverseCache
 
             var rows = loader.LoadInto(
                 reader, mapping,
-                progress: written => Log?.Invoke($"{tableName}: {written:N0} rows"),
+                progress: written => Log?.Invoke(FormattableString.Invariant($"{tableName}: {written:N0} rows")),
                 cancellationToken);
 
             return new LoadResult(mapping, rows);
-        });
+        }, cancellationToken);
 
         stopwatch.Stop();
 
@@ -281,11 +283,11 @@ public sealed class DataverseCache
     /// Runs one Dataverse query, translating service protection faults into
     /// something that says which limit was hit and what to do about it.
     /// </summary>
-    private T Fetch<T>(string sql, Func<DbDataReader, T> read)
+    private T Fetch<T>(string sql, Func<DbDataReader, T> read, CancellationToken cancellationToken = default)
     {
         try
         {
-            return _source.Query(sql, read);
+            return _source.Query(sql, read, cancellationToken);
         }
         catch (Exception e) when (DataverseThrottling.Explain(e) is { } explanation)
         {

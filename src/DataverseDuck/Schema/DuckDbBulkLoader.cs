@@ -1,5 +1,6 @@
 using System.Data.Common;
 using DuckDB.NET.Data;
+using DuckDB.NET.Native;
 
 namespace DataverseDuck.Schema;
 
@@ -141,11 +142,31 @@ public sealed class DuckDbBulkLoader(DuckDBConnection connection)
             case string v: row.AppendValue(v); break;
             case byte[] v: row.AppendValue(v); break;
             case DateTime v: row.AppendValue(v); break;
+            case TimeSpan v: row.AppendValue(ToDuckDbTime(v)); break;
             default:
                 throw new NotSupportedException(
                     $"The DuckDB appender has no overload for '{value.GetType().FullName}'. " +
                     $"Convert it in {nameof(DataverseSchemaMapper)}.{nameof(DataverseSchemaMapper.ConvertValue)} first.");
         }
+    }
+
+    /// <summary>
+    /// A Dataverse TIME-behaviour attribute maps to a bare <see cref="TimeSpan"/> (no
+    /// associated date), which the appender has no direct overload for; DuckDB's own TIME
+    /// column type is <see cref="DuckDBTimeOnly"/>.
+    /// </summary>
+    private static DuckDBTimeOnly ToDuckDbTime(TimeSpan value)
+    {
+        if (value < TimeSpan.Zero || value >= TimeSpan.FromDays(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "TIME values must be between 00:00:00 and 23:59:59.999999.");
+        }
+
+        return new DuckDBTimeOnly(
+            (byte)value.Hours,
+            (byte)value.Minutes,
+            (byte)value.Seconds,
+            (int)(value.Ticks % TimeSpan.TicksPerSecond / 10));
     }
 }
 

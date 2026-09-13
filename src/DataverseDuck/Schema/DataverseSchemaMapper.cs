@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.ServiceModel;
 using MarkMpn.Sql4Cds.Engine;
 using Microsoft.Xrm.Sdk;
 
@@ -190,11 +191,14 @@ public sealed class DataverseSchemaMapper
             // is unknown.
             entity = Metadata[table];
         }
-        catch (Exception e) when (e is not OutOfMemoryException and not StackOverflowException)
+        catch (FaultException<OrganizationServiceFault> fault) when (IsUnknownEntityFault(fault))
         {
-            // An unresolvable table is not an error here: the column may come
-            // from something with no entity behind it. Treating it as an
-            // instant is the same answer as having no metadata at all.
+            // AttributeMetadataCache reports an unknown entity this way. The
+            // column may come from something with no entity behind it, and
+            // treating it as an instant is the same answer as having no
+            // metadata at all. Anything else -- authentication, transport,
+            // provider failures -- is a real error and must propagate rather
+            // than being silently mapped as if metadata were simply absent.
             return instant;
         }
 
@@ -204,6 +208,29 @@ public sealed class DataverseSchemaMapper
 
         return attribute is null ? instant : UtcTimestampPolicy.MapDateTimeAttribute(attribute);
     }
+
+    /// <summary>
+    /// AttributeMetadataCache rethrows a genuine Dataverse fault (including
+    /// "entity not found") unchanged, but wraps every other exception --
+    /// authentication, transport, provider failures -- into a fresh
+    /// <see cref="FaultException{OrganizationServiceFault}"/> whose
+    /// <c>Detail.ErrorCode</c> is left at its default of 0 (verified against
+    /// the real MarkMpn.Sql4Cds.Engine DLL, which ships no source or docs).
+    /// ErrorCode 0 and the known service-protection throttling codes rule out
+    /// those wrapped/unrelated failures, but a genuine, non-throttling fault
+    /// can still be access-denied or a server/plugin failure rather than an
+    /// unknown entity -- both have a real, non-zero ErrorCode too. Those also
+    /// have to be excluded, and no documented error code distinguishes
+    /// "unknown entity" from them (RetrieveEntityRequest's failure codes are
+    /// server-internal and unpublished). The remaining, best available
+    /// signal is that a genuine "no such entity" fault's message says so --
+    /// unlike an access-denied or server-error message, which does not.
+    /// </summary>
+    private static bool IsUnknownEntityFault(FaultException<OrganizationServiceFault> fault) =>
+        fault.Detail is { ErrorCode: not 0 } detail &&
+        DataverseThrottling.FromErrorCode(detail.ErrorCode) == ThrottleKind.None &&
+        (fault.Message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+         fault.Message.Contains("does not exist", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// The DuckDB type for a CLR type produced by the reader.

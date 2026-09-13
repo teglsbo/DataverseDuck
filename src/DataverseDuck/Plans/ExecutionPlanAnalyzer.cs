@@ -89,7 +89,7 @@ public sealed class ExecutionPlanAnalyzer
 
     private PlanFinding? Classify(IExecutionPlanNode node)
     {
-        var rows = EstimatedRows(node);
+        var rows = LargestEstimate(node);
         var name = TypeName(node);
 
         if (DerivesFrom(node, JoinBaseTypeName))
@@ -129,6 +129,21 @@ public sealed class ExecutionPlanAnalyzer
 
     private PlanSeverity Escalate(int rows) =>
         rows >= LargeRowThreshold ? PlanSeverity.Critical : PlanSeverity.Warning;
+
+    /// <summary>
+    /// The offending node's own <see cref="EstimatedRows"/> is often small or
+    /// unavailable (-1) even when its subtree processes a large number of rows
+    /// -- a client-side join's own row count, for instance, describes its
+    /// output, not the (potentially huge) input it joined against. Walking the
+    /// subtree for the largest estimate avoids under-classifying severity for
+    /// non-folding operations that sit above a large data source.
+    /// </summary>
+    private static int LargestEstimate(IExecutionPlanNode node) =>
+        Walk(node)
+            .Select(EstimatedRows)
+            .Where(rows => rows >= 0)
+            .DefaultIfEmpty(-1)
+            .Max();
 
     /// <summary>
     /// Analyses a command and applies a policy to the result.

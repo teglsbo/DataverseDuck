@@ -58,7 +58,10 @@ public sealed class KeySetPushdown
     /// Runs <paramref name="keyQuery"/> against DuckDB and returns its distinct,
     /// non-null first-column values.
     /// </summary>
-    public IReadOnlyList<object> ReadKeys(DuckDBConnection connection, string keyQuery)
+    public IReadOnlyList<object> ReadKeys(
+        DuckDBConnection connection,
+        string keyQuery,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentException.ThrowIfNullOrWhiteSpace(keyQuery);
@@ -70,16 +73,23 @@ public sealed class KeySetPushdown
         // cost a slot in the IN list.
         command.CommandText = $"SELECT DISTINCT k FROM ({keyQuery}) t(k) WHERE k IS NOT NULL";
 
+        using var registration = cancellationToken.Register(command.Cancel);
+
+        // Register only arms command.Cancel() for what runs below; a
+        // cancellation arriving in the gap between the check above and here
+        // has nothing to interrupt yet, so it must be checked again.
+        cancellationToken.ThrowIfCancellationRequested();
         using var reader = command.ExecuteReader();
         List<object> keys = [];
 
         while (reader.Read())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             keys.Add(reader.GetValue(0));
 
             if (MaxKeys > 0 && keys.Count > MaxKeys)
                 throw new InvalidOperationException(
-                    $"The local query produced more than {MaxKeys:N0} keys. Sending them back to " +
+                    FormattableString.Invariant($"The local query produced more than {MaxKeys:N0} keys. Sending them back to ") +
                     "Dataverse as an IN filter is unlikely to beat fetching the table with a " +
                     "server-side filter instead. Narrow the local query, or raise MaxKeys if you " +
                     "are sure.");
@@ -92,6 +102,10 @@ public sealed class KeySetPushdown
     public IEnumerable<IReadOnlyList<object>> Batch(IReadOnlyList<object> keys)
     {
         ArgumentNullException.ThrowIfNull(keys);
+
+        // Zero or negative would make offset += BatchSize never advance, looping forever.
+        if (BatchSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(BatchSize), BatchSize, "BatchSize must be greater than zero.");
 
         for (var offset = 0; offset < keys.Count; offset += BatchSize)
             yield return keys.Skip(offset).Take(BatchSize).ToList();
@@ -140,12 +154,16 @@ public sealed class KeySetPushdown
 
         bool flag => flag ? "1" : "0",
 
-        byte or sbyte or short or ushort or int or uint or long or ulong =>
+        byte or sbyte or short or ushort or int or uint or long =>
             Convert.ToInt64(key, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
+
+        // Not folded into the branch above: Convert.ToInt64 throws OverflowException for any
+        // ulong past long.MaxValue, which is a legitimate value for an unsigned key column.
+        ulong value => value.ToString(CultureInfo.InvariantCulture),
 
         decimal value => value.ToString(CultureInfo.InvariantCulture),
 
-        DateTime timestamp => $"'{timestamp:yyyy-MM-dd HH:mm:ss.fff}'",
+        DateTime timestamp => $"'{timestamp:yyyy-MM-dd HH:mm:ss.fffffff}'",
 
         _ => throw new NotSupportedException(
             $"Cannot use a value of type {key.GetType().Name} as a Dataverse key. " +
@@ -177,17 +195,17 @@ public sealed class KeySetPushdown
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sql);
 
-        var start = sql.IndexOf(OpenMarker, StringComparison.Ordinal);
+        var start = FindMarker(sql, OpenMarker);
 
         if (start < 0)
             return null;
 
-        var end = sql.IndexOf(CloseMarker, start + OpenMarker.Length, StringComparison.Ordinal);
+        var end = FindMarker(sql, CloseMarker, start + OpenMarker.Length);
 
         if (end < 0)
             throw new FormatException($"'{OpenMarker}' was opened but never closed with '{CloseMarker}'.");
 
-        if (sql.IndexOf(OpenMarker, end + CloseMarker.Length, StringComparison.Ordinal) >= 0)
+        if (FindMarker(sql, OpenMarker, end + CloseMarker.Length) >= 0)
             throw new FormatException(
                 "Only one local key query is supported per statement. Two independent key sets " +
                 "would multiply the number of Dataverse round trips rather than narrowing them.");
@@ -198,6 +216,100 @@ public sealed class KeySetPushdown
             throw new FormatException($"'{OpenMarker}{CloseMarker}' is empty; it needs a DuckDB query returning key values.");
 
         return new LocalKeyQuery(inner, sql[..start], sql[(end + CloseMarker.Length)..]);
+    }
+
+    /// <summary>
+    /// Finds <paramref name="marker"/>, skipping over string/bracketed-identifier
+    /// literals and comments so that <c>{{</c> or <c>}}</c> appearing only inside one
+    /// of those (e.g. in a comment describing the syntax) is not mistaken for an
+    /// actual key-query delimiter.
+    /// </summary>
+    private static int FindMarker(string sql, string marker, int start = 0)
+    {
+        for (var position = start; position < sql.Length; position++)
+        {
+            var current = sql[position];
+            if (current == '\'' || current == '"')
+            {
+                position = SkipQuoted(sql, position, current);
+                continue;
+            }
+
+            if (current == '[')
+            {
+                position = SkipBracketed(sql, position);
+                continue;
+            }
+
+            if (current == '-' && position + 1 < sql.Length && sql[position + 1] == '-')
+            {
+                position = SkipLineComment(sql, position + 2);
+                continue;
+            }
+
+            if (current == '/' && position + 1 < sql.Length && sql[position + 1] == '*')
+            {
+                position = SkipBlockComment(sql, position + 2);
+                continue;
+            }
+
+            if (sql.AsSpan(position).StartsWith(marker, StringComparison.Ordinal))
+            {
+                return position;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int SkipQuoted(string sql, int start, char quote)
+    {
+        for (var position = start + 1; position < sql.Length; position++)
+        {
+            if (sql[position] != quote)
+                continue;
+
+            if (position + 1 < sql.Length && sql[position + 1] == quote)
+            {
+                position++;
+                continue;
+            }
+
+            return position;
+        }
+
+        return sql.Length - 1;
+    }
+
+    private static int SkipBracketed(string sql, int start)
+    {
+        for (var position = start + 1; position < sql.Length; position++)
+        {
+            if (sql[position] != ']')
+                continue;
+
+            if (position + 1 < sql.Length && sql[position + 1] == ']')
+            {
+                position++;
+                continue;
+            }
+
+            return position;
+        }
+
+        return sql.Length - 1;
+    }
+
+    private static int SkipLineComment(string sql, int start)
+    {
+        var newline = sql.IndexOf('\n', start);
+        return newline < 0 ? sql.Length : newline - 1;
+    }
+
+    private static int SkipBlockComment(string sql, int start)
+    {
+        var closing = sql.IndexOf("*/", start, StringComparison.Ordinal);
+        return closing < 0 ? sql.Length - 1 : closing + 1;
     }
 
     /// <summary>

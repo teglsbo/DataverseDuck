@@ -39,7 +39,13 @@ public static class Sql4CdsConnectionFactory
     {
         ArgumentNullException.ThrowIfNull(service);
 
+        if (service is ServiceClient serviceClient)
+        {
+            ConfigureForBulkExport(serviceClient);
+        }
+
         var connection = new Sql4CdsConnection(new[] { service });
+        Sql4CdsTelemetryPolicy.Disable(connection);
         Configure(connection, applicationName, useTdsEndpoint);
         return connection;
     }
@@ -63,9 +69,12 @@ public static class Sql4CdsConnectionFactory
         ConfigureForBulkExport(client);
 
         if (!client.IsReady)
-            throw new InvalidOperationException(
-                $"Dataverse connection to '{environmentUrl}' is not ready: {client.LastError}",
-                client.LastException);
+        {
+            var message = $"Dataverse connection to '{environmentUrl}' is not ready: {client.LastError}";
+            var lastException = client.LastException;
+            client.Dispose();
+            throw new InvalidOperationException(message, lastException);
+        }
 
         return Create(client, applicationName, useTdsEndpoint);
     }
@@ -101,6 +110,7 @@ public static class Sql4CdsConnectionFactory
         var connection = new Sql4CdsConnection(
             new Dictionary<string, DataSource>(StringComparer.OrdinalIgnoreCase) { [dataSource.Name] = dataSource });
 
+        Sql4CdsTelemetryPolicy.Disable(connection);
         Configure(connection, applicationName, useTdsEndpoint: false);
         return connection;
     }

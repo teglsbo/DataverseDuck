@@ -56,7 +56,7 @@ public static class DotEnvFile
                 continue;
             }
 
-            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(name)))
+            if (Environment.GetEnvironmentVariable(name) is not null)
             {
                 continue;
             }

@@ -36,7 +36,7 @@ public sealed record CacheEntry(
     {
         var what = Kind == PlanStepKind.Json
             ? "view"
-            : $"{RowCount ?? 0:N0} rows" + (IsPartial ? $" matching {KeyCount:N0} key(s)" : string.Empty);
+            : FormattableString.Invariant($"{RowCount ?? 0:N0} rows") + (IsPartial ? FormattableString.Invariant($" matching {KeyCount:N0} key(s)") : string.Empty);
 
         return $"{Name}  {what}, loaded {Humanise(Age)} ago";
     }
@@ -104,7 +104,11 @@ public static class CacheManifest
         // No primary key, because DuckDB rejects deleting and reinserting the
         // same key inside one transaction. An explicit delete says the same
         // thing and works where the load actually happens.
-        Execute(connection, transaction, $"DELETE FROM {TableName} WHERE name = $name",
+        //
+        // Matched case-insensitively: a plan can name the same source with different
+        // casing across runs (DuckDB table names aren't case-normalised), and without
+        // this a re-load leaves the old-cased entry behind instead of replacing it.
+        Execute(connection, transaction, $"DELETE FROM {TableName} WHERE lower(name) = lower($name)",
             ("name", entry.Name));
 
         Execute(connection, transaction,

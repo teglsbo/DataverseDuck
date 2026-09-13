@@ -66,7 +66,10 @@ public sealed record AccessTokenClaims
             ApplicationId = GetString(payload, "appid") ?? GetString(payload, "azp"),
             ObjectId = GetString(payload, "oid"),
             Roles = GetStringArray(payload, "roles"),
-            ExpiresOn = payload.TryGetProperty("exp", out var exp) && exp.TryGetInt64(out var seconds)
+            ExpiresOn = payload.TryGetProperty("exp", out var exp) &&
+                exp.TryGetInt64(out var seconds) &&
+                seconds >= DateTimeOffset.MinValue.ToUnixTimeSeconds() &&
+                seconds <= DateTimeOffset.MaxValue.ToUnixTimeSeconds()
                 ? DateTimeOffset.FromUnixTimeSeconds(seconds)
                 : null,
             // An app-only token has no user principal name and no name claim.

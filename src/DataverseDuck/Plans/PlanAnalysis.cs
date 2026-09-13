@@ -59,7 +59,7 @@ public sealed record PlanFinding(
 {
     public override string ToString() =>
         $"[{Severity}] {NodeType}: {Message}" +
-        (EstimatedRows >= 0 ? $" (estimated {EstimatedRows:N0} rows)" : string.Empty);
+        (EstimatedRows >= 0 ? FormattableString.Invariant($" (estimated {EstimatedRows:N0} rows)") : string.Empty);
 }
 
 /// <summary>
@@ -85,7 +85,7 @@ public sealed record PlanAnalysis(
     public string Describe()
     {
         if (FullyFolded)
-            return $"Plan folded entirely into FetchXML (estimated {EstimatedRows:N0} rows).";
+            return FormattableString.Invariant($"Plan folded entirely into FetchXML (estimated {EstimatedRows:N0} rows).");
 
         var lines = Problems.Select(f => "  " + f);
         return $"Plan does {Problems.Count()} operation(s) locally:\n{string.Join("\n", lines)}";
