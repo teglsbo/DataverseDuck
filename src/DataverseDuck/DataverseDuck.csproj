@@ -37,7 +37,7 @@
     <!-- Already a transitive dependency of MarkMpn.Sql4Cds.Engine 10.4.4; pinned explicitly
          so Sql4CdsTelemetryPolicy's use of TelemetryConfiguration stays on a version whose
          shape has actually been checked, rather than whatever a future Sql4Cds bump pulls in. -->
-    <PackageReference Include="Microsoft.ApplicationInsights" Version="2.23.0" />
+    <PackageReference Include="Microsoft.ApplicationInsights" Version="3.1.2" />
     <!-- Already a transitive dependency of MarkMpn.Sql4Cds.Engine 10.4.4; pinned explicitly
          to the same version so KeySetPushdown's own parsing stays on the exact grammar SQL 4
          CDS itself compiles against. -->
