@@ -32,7 +32,7 @@
   <ItemGroup>
     <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.5" />
     <PackageReference Include="MarkMpn.Sql4Cds.Engine" Version="10.4.4" />
-    <PackageReference Include="Microsoft.Identity.Client" Version="4.79.0" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.90.0" />
     <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.79.0" />
     <!-- Already a transitive dependency of MarkMpn.Sql4Cds.Engine 10.4.4; pinned explicitly
          so Sql4CdsTelemetryPolicy's use of TelemetryConfiguration stays on a version whose
