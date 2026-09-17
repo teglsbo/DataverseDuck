@@ -41,7 +41,7 @@
     <!-- Already a transitive dependency of MarkMpn.Sql4Cds.Engine 10.4.4; pinned explicitly
          to the same version so KeySetPushdown's own parsing stays on the exact grammar SQL 4
          CDS itself compiles against. -->
-    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="170.64.0" />
+    <PackageReference Include="Microsoft.SqlServer.TransactSql.ScriptDom" Version="180.107.0" />
   </ItemGroup>
 
 </Project>
