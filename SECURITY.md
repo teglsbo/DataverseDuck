@@ -8,4 +8,4 @@ Include a minimal reproduction and the version/commit affected. Vulnerabilities 
 dependency (`Microsoft.PowerPlatform.Dataverse.Client`, `MarkMpn.Sql4Cds.Engine`,
 DuckDB) should generally be reported upstream instead.
 
-This project is pre-1.0, with a single maintained line (`master`).
+This project is pre-1.0, with a single maintained line (`main`).
